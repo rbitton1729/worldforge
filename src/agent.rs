@@ -1,0 +1,201 @@
+use crate::chronicle::{Chronicle, Event};
+use crate::world::World;
+use rand::Rng;
+use rand_chacha::ChaCha8Rng;
+
+/// Hunger above this → starving, agents prioritize food.
+pub const HUNGER_STARVE_THRESHOLD: f32 = 70.0;
+/// Hunger at 100 means the agent starts taking health damage.
+pub const HUNGER_MAX: f32 = 100.0;
+/// Hunger increase per tick.
+const HUNGER_PER_TICK: f32 = 0.6;
+/// Health damage per tick while fully starving.
+const STARVE_DAMAGE: f32 = 2.5;
+/// Food eaten per bite (per tick on a food-bearing tile).
+const BITE_SIZE: f32 = 2.0;
+/// How much hunger one unit of food restores.
+const FOOD_TO_HUNGER: f32 = 15.0;
+
+#[derive(Debug, Clone)]
+pub struct Agent {
+    pub id: u32,
+    pub col: i32,
+    pub row: i32,
+    pub hunger: f32,
+    pub health: f32,
+    pub age: u32,
+    pub alive: bool,
+    pub settlement: Option<u32>,
+}
+
+impl Agent {
+    pub fn new(id: u32, col: i32, row: i32) -> Self {
+        Self {
+            id,
+            col,
+            row,
+            hunger: 20.0,
+            health: 100.0,
+            age: 0,
+            alive: true,
+            settlement: None,
+        }
+    }
+}
+
+/// Run one tick for every agent: update hunger, forage or wander, resolve deaths.
+pub fn step_agents(
+    agents: &mut [Agent],
+    world: &mut World,
+    rng: &mut ChaCha8Rng,
+    chronicle: &mut Chronicle,
+    tick: u64,
+) {
+    for agent in agents.iter_mut() {
+        if !agent.alive {
+            continue;
+        }
+
+        agent.age += 1;
+        agent.hunger = (agent.hunger + HUNGER_PER_TICK).min(HUNGER_MAX);
+
+        let starving = agent.hunger >= HUNGER_STARVE_THRESHOLD;
+
+        // Try to eat first if we're standing on food.
+        let on_food = world
+            .tile(agent.col, agent.row)
+            .map_or(false, |t| t.food >= 0.5);
+
+        if on_food && (starving || agent.hunger > 30.0) {
+            if let Some(t) = world.tile_mut(agent.col, agent.row) {
+                let bite = BITE_SIZE.min(t.food);
+                t.food -= bite;
+                agent.hunger = (agent.hunger - bite * FOOD_TO_HUNGER).max(0.0);
+            }
+        } else {
+            // Move: seek food if starving, else wander.
+            let target = if starving {
+                find_nearby_food(world, agent.col, agent.row, 3)
+            } else {
+                None
+            };
+
+            let (nc, nr) = match target {
+                Some((tc, tr)) => step_toward(world, agent.col, agent.row, tc, tr),
+                None => wander(world, agent.col, agent.row, rng),
+            };
+
+            if world.is_land(nc, nr) {
+                agent.col = nc;
+                agent.row = nr;
+            }
+        }
+
+        // Starvation damage.
+        if agent.hunger >= HUNGER_MAX {
+            agent.health -= STARVE_DAMAGE;
+        } else if agent.health < 100.0 && agent.hunger < 40.0 {
+            agent.health = (agent.health + 0.5).min(100.0);
+        }
+
+        if agent.health <= 0.0 {
+            agent.alive = false;
+            chronicle.record(Event::new(
+                tick,
+                format!(
+                    "Soul #{} perishes on the {} near ({}, {}).",
+                    agent.id,
+                    world
+                        .tile(agent.col, agent.row)
+                        .map(|t| t.biome.name())
+                        .unwrap_or("void"),
+                    agent.col,
+                    agent.row
+                ),
+            ));
+        }
+    }
+}
+
+/// Scan hex tiles within `radius` for the one with the most food; return its coords.
+fn find_nearby_food(world: &World, col: i32, row: i32, radius: i32) -> Option<(i32, i32)> {
+    let mut best: Option<((i32, i32), f32)> = None;
+    for dr in -radius..=radius {
+        for dc in -radius..=radius {
+            let c = col + dc;
+            let r = row + dr;
+            if world.hex_distance((col, row), (c, r)) > radius {
+                continue;
+            }
+            if let Some(tile) = world.tile(c, r) {
+                if tile.food >= 1.0 {
+                    let score = tile.food - world.hex_distance((col, row), (c, r)) as f32 * 0.5;
+                    match best {
+                        Some((_, s)) if s >= score => {}
+                        _ => best = Some(((c, r), score)),
+                    }
+                }
+            }
+        }
+    }
+    best.map(|(pos, _)| pos)
+}
+
+/// Pick the neighbor that reduces hex distance to the target the most.
+fn step_toward(world: &World, col: i32, row: i32, tc: i32, tr: i32) -> (i32, i32) {
+    let cur = world.hex_distance((col, row), (tc, tr));
+    let mut best = (col, row);
+    let mut best_d = cur;
+    for (nc, nr) in world.neighbors(col, row) {
+        if !world.is_land(nc, nr) {
+            continue;
+        }
+        let d = world.hex_distance((nc, nr), (tc, tr));
+        if d < best_d {
+            best_d = d;
+            best = (nc, nr);
+        }
+    }
+    best
+}
+
+fn wander(world: &World, col: i32, row: i32, rng: &mut ChaCha8Rng) -> (i32, i32) {
+    // 40% stay put, 60% step to a random passable neighbor.
+    if rng.gen_bool(0.4) {
+        return (col, row);
+    }
+    let neighbors = world.neighbors(col, row);
+    let passable: Vec<(i32, i32)> = neighbors
+        .into_iter()
+        .filter(|&(c, r)| world.is_land(c, r))
+        .collect();
+    if passable.is_empty() {
+        (col, row)
+    } else {
+        passable[rng.gen_range(0..passable.len())]
+    }
+}
+
+pub fn alive_count(agents: &[Agent]) -> usize {
+    agents.iter().filter(|a| a.alive).count()
+}
+
+/// Seed `n` agents randomly on passable, food-bearing tiles.
+pub fn seed_agents(world: &World, n: u32, rng: &mut ChaCha8Rng) -> Vec<Agent> {
+    let mut out = Vec::with_capacity(n as usize);
+    let mut placed = 0u32;
+    let mut attempts = 0u32;
+    let max_attempts = n.saturating_mul(50).max(5000);
+    while placed < n && attempts < max_attempts {
+        attempts += 1;
+        let col = rng.gen_range(0..world.width as i32);
+        let row = rng.gen_range(0..world.height as i32);
+        if let Some(tile) = world.tile(col, row) {
+            if tile.biome.is_passable() && tile.biome.food_cap() > 0.0 {
+                out.push(Agent::new(placed, col, row));
+                placed += 1;
+            }
+        }
+    }
+    out
+}
