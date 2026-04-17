@@ -46,6 +46,10 @@ struct Cli {
     #[arg(short = 'H', long = "height", default_value_t = 40)]
     height: u32,
 
+    /// Disable ANSI color output (also honors NO_COLOR env var)
+    #[arg(long = "no-color", default_value_t = false)]
+    no_color: bool,
+
     /// Print help
     #[arg(long = "help", action = clap::ArgAction::Help)]
     help: Option<bool>,
@@ -76,6 +80,10 @@ fn main() {
         },
         None => Chronicle::to_stdout(),
     };
+
+    if cli.no_color {
+        chronicle.set_color(false);
+    }
 
     let _ = chronicle.proclaim(&format!(
         "worldforge — seed {} — {}×{} world — {} souls",
