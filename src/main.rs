@@ -148,6 +148,9 @@ fn main() {
         tick += 1;
         let tick_start = Instant::now();
 
+        if let Some(line) = world.tick_climate(tick) {
+            chronicle.record(Event::new(tick, line.to_string()));
+        }
         world.regen_food(tick);
         step_agents(
             &mut agents,

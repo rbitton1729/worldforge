@@ -1,8 +1,12 @@
 use crate::chronicle::{Chronicle, Event};
 use crate::settlement::Settlements;
-use crate::world::{World, FERTILITY_PER_BITE};
+use crate::world::{Biome, World, FERTILITY_PER_BITE};
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
+
+/// Extra hunger paid when stepping onto a mountain tile — mountains are
+/// traversable but roughly twice as costly as other terrain.
+pub const MOUNTAIN_MOVE_HUNGER: f32 = 1.4;
 
 /// Probability a newly-born/seeded agent becomes a merchant.
 const MERCHANT_CHANCE: f64 = 0.10;
@@ -179,8 +183,16 @@ pub fn step_agents(
                 };
 
                 if world.is_land(nc, nr) {
+                    let stepped_onto_mountain = (nc, nr) != (agent.col, agent.row)
+                        && world
+                            .tile(nc, nr)
+                            .map_or(false, |t| t.biome == Biome::Mountains);
                     agent.col = nc;
                     agent.row = nr;
+                    if stepped_onto_mountain {
+                        agent.hunger =
+                            (agent.hunger + MOUNTAIN_MOVE_HUNGER).min(HUNGER_MAX);
+                    }
                 }
             }
 
@@ -440,8 +452,16 @@ fn step_merchant(
                 } else {
                     let (nc, nr) = step_toward(world, agent.col, agent.row, dc, dr);
                     if world.is_land(nc, nr) {
+                        let stepped_onto_mountain = (nc, nr) != (agent.col, agent.row)
+                            && world
+                                .tile(nc, nr)
+                                .map_or(false, |t| t.biome == Biome::Mountains);
                         agent.col = nc;
                         agent.row = nr;
+                        if stepped_onto_mountain {
+                            agent.hunger =
+                                (agent.hunger + MOUNTAIN_MOVE_HUNGER).min(HUNGER_MAX);
+                        }
                     }
                 }
             }
@@ -486,8 +506,15 @@ fn step_merchant(
     } else {
         let (nc, nr) = step_toward(world, agent.col, agent.row, hc, hr);
         if world.is_land(nc, nr) {
+            let stepped_onto_mountain = (nc, nr) != (agent.col, agent.row)
+                && world
+                    .tile(nc, nr)
+                    .map_or(false, |t| t.biome == Biome::Mountains);
             agent.col = nc;
             agent.row = nr;
+            if stepped_onto_mountain {
+                agent.hunger = (agent.hunger + MOUNTAIN_MOVE_HUNGER).min(HUNGER_MAX);
+            }
         }
     }
 }
@@ -516,18 +543,25 @@ fn find_nearby_food(world: &World, col: i32, row: i32, radius: i32) -> Option<(i
     best.map(|(pos, _)| pos)
 }
 
-/// Pick the neighbor that reduces hex distance to the target the most.
+/// Pick the neighbor that reduces hex distance to the target the most. Ties
+/// break in favor of non-mountain tiles so agents route around peaks when a
+/// flat neighbor is equally good.
 fn step_toward(world: &World, col: i32, row: i32, tc: i32, tr: i32) -> (i32, i32) {
     let cur = world.hex_distance((col, row), (tc, tr));
+    let cur_mountain =
+        world.tile(col, row).map_or(false, |t| t.biome == Biome::Mountains);
     let mut best = (col, row);
-    let mut best_d = cur;
+    let mut best_score: (i32, u8) = (cur, if cur_mountain { 1 } else { 0 });
     for (nc, nr) in world.neighbors(col, row) {
         if !world.is_land(nc, nr) {
             continue;
         }
         let d = world.hex_distance((nc, nr), (tc, tr));
-        if d < best_d {
-            best_d = d;
+        let is_mountain =
+            world.tile(nc, nr).map_or(false, |t| t.biome == Biome::Mountains);
+        let score = (d, if is_mountain { 1 } else { 0 });
+        if score < best_score {
+            best_score = score;
             best = (nc, nr);
         }
     }
@@ -545,10 +579,18 @@ fn wander(world: &World, col: i32, row: i32, rng: &mut ChaCha8Rng) -> (i32, i32)
         .filter(|&(c, r)| world.is_land(c, r))
         .collect();
     if passable.is_empty() {
-        (col, row)
-    } else {
-        passable[rng.gen_range(0..passable.len())]
+        return (col, row);
     }
+    // Avoid mountains when any flatter alternative exists.
+    let flat: Vec<(i32, i32)> = passable
+        .iter()
+        .copied()
+        .filter(|&(c, r)| {
+            world.tile(c, r).map_or(true, |t| t.biome != Biome::Mountains)
+        })
+        .collect();
+    let pool = if flat.is_empty() { &passable } else { &flat };
+    pool[rng.gen_range(0..pool.len())]
 }
 
 pub fn alive_count(agents: &[Agent]) -> usize {

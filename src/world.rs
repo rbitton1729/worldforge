@@ -1,5 +1,7 @@
 use crate::region::{self, Region};
 use crate::worldgen;
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Biome {
@@ -15,7 +17,7 @@ pub enum Biome {
 
 impl Biome {
     pub fn is_passable(self) -> bool {
-        !matches!(self, Biome::Ocean | Biome::Mountains)
+        !matches!(self, Biome::Ocean)
     }
 
     /// Base food regenerated per tick per tile (scaled small).
@@ -84,6 +86,17 @@ pub const FERTILITY_RECOVERY: f32 = 0.001;
 /// tile still holds a fraction of its base capacity.
 pub const FERTILITY_CAP_FLOOR: f32 = 0.2;
 
+/// Absolute bound on climate drift — keeps the world this side of an ice age.
+pub const CLIMATE_DRIFT_MIN: f32 = -0.15;
+pub const CLIMATE_DRIFT_MAX: f32 = 0.15;
+/// Drift threshold at which elders start remarking on the warmth.
+pub const CLIMATE_WARM_THRESHOLD: f32 = 0.08;
+pub const CLIMATE_COLD_THRESHOLD: f32 = -0.08;
+/// Baseline drift magnitude per year (±).
+const CLIMATE_DRIFT_MAGNITUDE: f32 = 0.0005;
+/// Drift has to relax back inside this band before the warm/cold event can refire.
+const CLIMATE_NOTIFY_RESET: f32 = 0.04;
+
 #[derive(Debug, Clone)]
 pub struct Tile {
     pub biome: Biome,
@@ -104,18 +117,36 @@ pub struct World {
     pub regions: Vec<Region>,
     /// Per-tile lookup into `regions`. None for tiles outside any named region.
     region_of: Vec<Option<u16>>,
+    /// Long-timescale temperature drift in `[CLIMATE_DRIFT_MIN, CLIMATE_DRIFT_MAX]`.
+    pub climate_drift: f32,
+    climate_direction: f32,
+    climate_next_flip_year: u64,
+    climate_warm_notified: bool,
+    climate_cold_notified: bool,
+    climate_rng: ChaCha8Rng,
 }
 
 impl World {
     pub fn generate(width: u32, height: u32, seed: u64) -> Self {
         let tiles = worldgen::generate_tiles(width, height, seed);
         let (regions, region_of) = region::detect_regions(&tiles, width, height, seed);
+        let mut climate_rng = ChaCha8Rng::seed_from_u64(seed ^ 0xC11A_7ED_D11F7);
+        let dir_sign: f32 = if climate_rng.gen_bool(0.5) { 1.0 } else { -1.0 };
+        let dir_scale: f32 = climate_rng.gen_range(0.6f32..=1.4f32);
+        let climate_direction = dir_sign * CLIMATE_DRIFT_MAGNITUDE * dir_scale;
+        let climate_next_flip_year = climate_rng.gen_range(50..=100);
         Self {
             width,
             height,
             tiles,
             regions,
             region_of,
+            climate_drift: 0.0,
+            climate_direction,
+            climate_next_flip_year,
+            climate_warm_notified: false,
+            climate_cold_notified: false,
+            climate_rng,
         }
     }
 
@@ -206,6 +237,7 @@ impl World {
 
     pub fn regen_food(&mut self, tick: u64) {
         let factor = season_regen_factor(tick);
+        let climate_factor = (1.0 + self.climate_drift * 0.5).max(0.0);
         // Precompute river-adjacency so the subsequent mut borrow of tiles is clean.
         let mut bonus = vec![false; self.tiles.len()];
         for row in 0..self.height as i32 {
@@ -218,7 +250,7 @@ impl World {
         for (i, tile) in self.tiles.iter_mut().enumerate() {
             let (regen_mul, cap_mul) = if bonus[i] { (1.5, 1.5) } else { (1.0, 1.0) };
             let fert = tile.fertility;
-            let regen = tile.biome.food_regen() * factor * regen_mul * fert;
+            let regen = tile.biome.food_regen() * factor * climate_factor * regen_mul * fert;
             let cap = tile.biome.food_cap() * cap_mul * fert.max(FERTILITY_CAP_FLOOR);
             if regen > 0.0 && tile.food < cap {
                 tile.food = (tile.food + regen).min(cap);
@@ -230,6 +262,46 @@ impl World {
                 tile.fertility = (fert + FERTILITY_RECOVERY * factor).min(natural);
             }
         }
+    }
+
+    /// Advance the world's long-term climate drift. Intended to be called once
+    /// per year (on tick boundaries `% TICKS_PER_YEAR == 0`); calls on other
+    /// ticks are no-ops. Returns a chronicle line if a drift threshold was
+    /// freshly crossed this year.
+    pub fn tick_climate(&mut self, tick: u64) -> Option<&'static str> {
+        let ticks_per_year = crate::chronicle::TICKS_PER_YEAR;
+        if tick == 0 || tick % ticks_per_year != 0 {
+            return None;
+        }
+        let year = tick / ticks_per_year;
+        self.climate_drift = (self.climate_drift + self.climate_direction)
+            .clamp(CLIMATE_DRIFT_MIN, CLIMATE_DRIFT_MAX);
+
+        if year >= self.climate_next_flip_year {
+            let dir_sign: f32 = if self.climate_rng.gen_bool(0.5) { 1.0 } else { -1.0 };
+            let dir_scale: f32 = self.climate_rng.gen_range(0.6f32..=1.4f32);
+            self.climate_direction = dir_sign * CLIMATE_DRIFT_MAGNITUDE * dir_scale;
+            self.climate_next_flip_year = year + self.climate_rng.gen_range(50..=100);
+        }
+
+        let mut event: Option<&'static str> = None;
+        if self.climate_drift > CLIMATE_WARM_THRESHOLD {
+            if !self.climate_warm_notified {
+                self.climate_warm_notified = true;
+                event = Some("The seasons grow warmer than any elder remembers.");
+            }
+        } else if self.climate_drift < CLIMATE_NOTIFY_RESET {
+            self.climate_warm_notified = false;
+        }
+        if self.climate_drift < CLIMATE_COLD_THRESHOLD {
+            if !self.climate_cold_notified {
+                self.climate_cold_notified = true;
+                event = Some("An unseasonable cold settles over the land.");
+            }
+        } else if self.climate_drift > -CLIMATE_NOTIFY_RESET {
+            self.climate_cold_notified = false;
+        }
+        event
     }
 
     /// Count distinct rivers (connected components of river tiles).

@@ -92,6 +92,9 @@ pub fn run_simulation(cfg: SimConfig) -> SimOutcome {
         }
         tick += 1;
 
+        if let Some(line) = world.tick_climate(tick) {
+            chronicle.record(Event::new(tick, line.to_string()));
+        }
         world.regen_food(tick);
         step_agents(
             &mut agents,
