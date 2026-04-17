@@ -1,0 +1,152 @@
+stages:
+  - test
+  - build
+  - upload
+  - release
+  - publish
+
+variables:
+  CARGO_HOME: ${CI_PROJECT_DIR}/.cargo
+  PACKAGE_URL: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/worldforge"
+
+cache:
+  key: v2-${CI_COMMIT_REF_SLUG}-${CI_JOB_NAME}
+  paths:
+    - .cargo/registry
+    - .cargo/git
+
+test:
+  stage: test
+  image: rust:latest
+  script:
+    - cargo test
+
+build:x86_64:
+  stage: build
+  image: rust:latest
+  variables:
+    TARGET: x86_64-unknown-linux-musl
+  before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends musl-tools
+    - rustup target add ${TARGET}
+  script:
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        VERSION="${CI_COMMIT_TAG#v}"
+        sed -i "s/^version = .*/version = \"${VERSION}\"/" Cargo.toml
+      fi
+    - cargo build --release --target ${TARGET}
+    - strip target/${TARGET}/release/worldforge
+    - cp target/${TARGET}/release/worldforge worldforge-linux-amd64
+    - sha256sum worldforge-linux-amd64 | cut -d' ' -f1 > worldforge-linux-amd64.sha256
+  artifacts:
+    paths:
+      - worldforge-linux-amd64
+      - worldforge-linux-amd64.sha256
+
+build:aarch64:
+  stage: build
+  image: rust:latest
+  variables:
+    TARGET: aarch64-unknown-linux-musl
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
+  before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu musl-tools
+    - rustup target add ${TARGET}
+  script:
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        VERSION="${CI_COMMIT_TAG#v}"
+        sed -i "s/^version = .*/version = \"${VERSION}\"/" Cargo.toml
+      fi
+    - cargo build --release --target ${TARGET}
+    - aarch64-linux-gnu-strip target/${TARGET}/release/worldforge
+    - cp target/${TARGET}/release/worldforge worldforge-linux-arm64
+    - sha256sum worldforge-linux-arm64 | cut -d' ' -f1 > worldforge-linux-arm64.sha256
+  artifacts:
+    paths:
+      - worldforge-linux-arm64
+      - worldforge-linux-arm64.sha256
+
+upload:
+  stage: upload
+  image: curlimages/curl:latest
+  needs:
+    - job: build:x86_64
+      artifacts: true
+    - job: build:aarch64
+      artifacts: true
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+  script:
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - echo "VERSION=${VERSION}" > version.env
+    - |
+      curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+           --upload-file worldforge-linux-amd64 \
+           "${PACKAGE_URL}/${VERSION}/worldforge-linux-amd64"
+    - |
+      curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+           --upload-file worldforge-linux-amd64.sha256 \
+           "${PACKAGE_URL}/${VERSION}/worldforge-linux-amd64.sha256"
+    - |
+      curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+           --upload-file worldforge-linux-arm64 \
+           "${PACKAGE_URL}/${VERSION}/worldforge-linux-arm64"
+    - |
+      curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+           --upload-file worldforge-linux-arm64.sha256 \
+           "${PACKAGE_URL}/${VERSION}/worldforge-linux-arm64.sha256"
+  artifacts:
+    reports:
+      dotenv: version.env
+
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - job: build:x86_64
+      artifacts: true
+    - job: build:aarch64
+      artifacts: true
+    - job: upload
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+  script:
+    - AMD64_SHA256=$(cat worldforge-linux-amd64.sha256)
+    - ARM64_SHA256=$(cat worldforge-linux-arm64.sha256)
+    - echo "## Checksums" > description.md
+    - echo "" >> description.md
+    - echo "| File | SHA256 |" >> description.md
+    - echo "|------|--------|" >> description.md
+    - echo "| worldforge-linux-amd64 | \`${AMD64_SHA256}\` |" >> description.md
+    - echo "| worldforge-linux-arm64 | \`${ARM64_SHA256}\` |" >> description.md
+  release:
+    tag_name: ${CI_COMMIT_TAG}
+    name: "worldforge ${CI_COMMIT_TAG}"
+    description: ./description.md
+    assets:
+      links:
+        - name: worldforge-linux-amd64
+          url: "${PACKAGE_URL}/${VERSION}/worldforge-linux-amd64"
+          filepath: /worldforge-linux-amd64
+          link_type: package
+        - name: worldforge-linux-arm64
+          url: "${PACKAGE_URL}/${VERSION}/worldforge-linux-arm64"
+          filepath: /worldforge-linux-arm64
+          link_type: package
+
+crates_io:
+  stage: publish
+  image: rust:latest
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+  cache: []
+  variables:
+    CARGO_REGISTRY_TOKEN: $CARGO_REGISTRY_TOKEN
+  script:
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - sed -i "s/^version = .*/version = \"${VERSION}\"/" Cargo.toml
+    - cargo publish --no-verify --allow-dirty
