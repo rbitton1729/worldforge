@@ -1,7 +1,15 @@
 use crate::chronicle::{Chronicle, Event};
+use crate::settlement::Settlements;
 use crate::world::World;
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
+
+/// Probability a newly-born/seeded agent becomes a merchant.
+const MERCHANT_CHANCE: f64 = 0.10;
+/// Food units a merchant loads from a settlement stockpile in one trip.
+const MERCHANT_CARGO: f32 = 4.0;
+/// Minimum stockpile before a merchant will load cargo and depart.
+const MERCHANT_LOAD_MIN: f32 = 6.0;
 
 /// Hunger above this → starving, agents prioritize food.
 pub const HUNGER_STARVE_THRESHOLD: f32 = 70.0;
@@ -42,6 +50,10 @@ pub struct Agent {
     pub max_age: u32,
     pub alive: bool,
     pub settlement: Option<u32>,
+    pub merchant: bool,
+    pub cargo: f32,
+    pub cargo_origin: Option<u32>,
+    pub destination: Option<u32>,
 }
 
 impl Agent {
@@ -57,6 +69,10 @@ impl Agent {
             max_age,
             alive: true,
             settlement: None,
+            merchant: false,
+            cargo: 0.0,
+            cargo_origin: None,
+            destination: None,
         }
     }
 }
@@ -84,6 +100,7 @@ fn roll_lifespan(rng: &mut ChaCha8Rng) -> u32 {
 pub fn step_agents(
     agents: &mut Vec<Agent>,
     world: &mut World,
+    settlements: &mut Settlements,
     rng: &mut ChaCha8Rng,
     chronicle: &mut Chronicle,
     tick: u64,
@@ -108,33 +125,70 @@ pub fn step_agents(
 
         let starving = agent.hunger >= HUNGER_STARVE_THRESHOLD;
 
-        // Try to eat first if we're standing on food.
-        let on_food = world
-            .tile(agent.col, agent.row)
-            .map_or(false, |t| t.food >= 0.5);
-
-        if on_food && (starving || agent.hunger > 30.0) {
-            if let Some(t) = world.tile_mut(agent.col, agent.row) {
-                let bite = BITE_SIZE.min(t.food);
-                t.food -= bite;
-                agent.hunger = (agent.hunger - bite * FOOD_TO_HUNGER).max(0.0);
-            }
+        if agent.merchant {
+            step_merchant(agent, world, settlements, rng, chronicle, tick);
         } else {
-            // Move: seek food if starving, else wander.
-            let target = if starving {
-                find_nearby_food(world, agent.col, agent.row, 3)
+            // Try to eat first if we're standing on food.
+            let on_food = world
+                .tile(agent.col, agent.row)
+                .map_or(false, |t| t.food >= 0.5);
+
+            if on_food && (starving || agent.hunger > 30.0) {
+                if let Some(t) = world.tile_mut(agent.col, agent.row) {
+                    let bite = BITE_SIZE.min(t.food);
+                    t.food -= bite;
+                    agent.hunger = (agent.hunger - bite * FOOD_TO_HUNGER).max(0.0);
+                }
             } else {
-                None
-            };
+                // Move: seek food if starving, else wander.
+                let target = if starving {
+                    find_nearby_food(world, agent.col, agent.row, 3)
+                } else {
+                    None
+                };
 
-            let (nc, nr) = match target {
-                Some((tc, tr)) => step_toward(world, agent.col, agent.row, tc, tr),
-                None => wander(world, agent.col, agent.row, rng),
-            };
+                let (nc, nr) = match target {
+                    Some((tc, tr)) => step_toward(world, agent.col, agent.row, tc, tr),
+                    None => wander(world, agent.col, agent.row, rng),
+                };
 
-            if world.is_land(nc, nr) {
-                agent.col = nc;
-                agent.row = nr;
+                if world.is_land(nc, nr) {
+                    agent.col = nc;
+                    agent.row = nr;
+                }
+            }
+
+            // Settled foragers gather surplus for the stockpile.
+            if agent.hunger < 30.0 {
+                if let Some(sid) = agent.settlement {
+                    let tile_food = world.tile(agent.col, agent.row).map(|t| t.food).unwrap_or(0.0);
+                    if tile_food >= 1.0 {
+                        let gather = 0.5_f32.min(tile_food - 0.5);
+                        if gather > 0.0 {
+                            if let Some(t) = world.tile_mut(agent.col, agent.row) {
+                                t.food -= gather;
+                            }
+                            if let Some(s) = settlements.list.iter_mut().find(|s| s.id == sid) {
+                                s.stockpile += gather;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Starving settled agents can eat from the stockpile if close to home.
+            if starving {
+                if let Some(sid) = agent.settlement {
+                    if let Some(s) = settlements.list.iter_mut().find(|s| s.id == sid) {
+                        if world.hex_distance((s.col, s.row), (agent.col, agent.row)) <= 1
+                            && s.stockpile >= 0.5
+                        {
+                            let bite = BITE_SIZE.min(s.stockpile);
+                            s.stockpile -= bite;
+                            agent.hunger = (agent.hunger - bite * FOOD_TO_HUNGER).max(0.0);
+                        }
+                    }
+                }
             }
         }
 
@@ -202,6 +256,9 @@ pub fn step_agents(
                 );
                 child.hunger = 35.0;
                 child.settlement = agent.settlement;
+                if agent.settlement.is_some() && rng.gen_bool(MERCHANT_CHANCE) {
+                    child.merchant = true;
+                }
                 next_id += 1;
                 // Parent pays a hunger cost for bearing a child.
                 agent.hunger = (agent.hunger + 25.0).min(HUNGER_MAX);
@@ -212,6 +269,163 @@ pub fn step_agents(
 
     if !newborns.is_empty() {
         agents.extend(newborns);
+    }
+}
+
+/// Handle one tick for a merchant agent: load cargo at home, travel to
+/// destination, deposit cargo, then declare the destination the new home.
+fn step_merchant(
+    agent: &mut Agent,
+    world: &mut World,
+    settlements: &mut Settlements,
+    rng: &mut ChaCha8Rng,
+    chronicle: &mut Chronicle,
+    tick: u64,
+) {
+    // If the home settlement is gone, demote to a regular wanderer.
+    let home_alive = agent
+        .settlement
+        .and_then(|id| settlements.list.iter().find(|s| s.id == id))
+        .map_or(false, |s| s.alive);
+    if !home_alive {
+        agent.merchant = false;
+        agent.cargo = 0.0;
+        agent.destination = None;
+        agent.cargo_origin = None;
+        agent.settlement = None;
+        return;
+    }
+
+    // Eat from cargo when hungry, so merchants don't starve on the road.
+    if agent.hunger >= 50.0 && agent.cargo >= 0.5 {
+        let bite = BITE_SIZE.min(agent.cargo);
+        agent.cargo -= bite;
+        agent.hunger = (agent.hunger - bite * FOOD_TO_HUNGER).max(0.0);
+    } else if agent.hunger >= HUNGER_STARVE_THRESHOLD {
+        // Desperate: try to eat from the ground.
+        let tile_food = world.tile(agent.col, agent.row).map(|t| t.food).unwrap_or(0.0);
+        if tile_food >= 0.5 {
+            if let Some(t) = world.tile_mut(agent.col, agent.row) {
+                let bite = BITE_SIZE.min(t.food);
+                t.food -= bite;
+                agent.hunger = (agent.hunger - bite * FOOD_TO_HUNGER).max(0.0);
+            }
+        }
+    }
+
+    // If carrying cargo toward a destination, travel; if arrived, deliver.
+    if let Some(dest_id) = agent.destination {
+        let dest = settlements
+            .list
+            .iter()
+            .find(|s| s.id == dest_id && s.alive)
+            .map(|s| (s.col, s.row, s.name.clone()));
+        match dest {
+            Some((dc, dr, dname)) => {
+                if (agent.col, agent.row) == (dc, dr) {
+                    let origin_id = agent.cargo_origin;
+                    let origin_name = origin_id
+                        .and_then(|oid| settlements.list.iter().find(|s| s.id == oid))
+                        .map(|s| s.name.clone())
+                        .unwrap_or_else(|| "distant lands".to_string());
+                    let origin_stock = origin_id
+                        .and_then(|oid| settlements.list.iter().find(|s| s.id == oid))
+                        .map(|s| s.stockpile)
+                        .unwrap_or(0.0);
+                    let delivered = agent.cargo;
+                    if let Some(dest_s) =
+                        settlements.list.iter_mut().find(|s| s.id == dest_id)
+                    {
+                        let needy = dest_s.stockpile < origin_stock + 1.0;
+                        if delivered >= 0.5 && needy {
+                            dest_s.stockpile += delivered;
+                            // Occasional chronicle of arrival keeps the log from flooding.
+                            if rng.gen_bool(0.2) {
+                                chronicle.record(Event::new(
+                                    tick,
+                                    format!(
+                                        "A merchant arrives at {} bearing grain from distant {}.",
+                                        dname, origin_name
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                    // Record the trip on both endpoints, and chronicle a new trade road once.
+                    let mut road_formed = false;
+                    if let Some(oid) = origin_id {
+                        if let Some(o) = settlements.list.iter_mut().find(|s| s.id == oid) {
+                            road_formed |= o.note_trip(dest_id);
+                        }
+                        if let Some(d) = settlements.list.iter_mut().find(|s| s.id == dest_id) {
+                            road_formed |= d.note_trip(oid);
+                        }
+                    }
+                    if road_formed {
+                        chronicle.record(Event::new(
+                            tick,
+                            format!(
+                                "A trade road forms between {} and {}.",
+                                origin_name, dname
+                            ),
+                        ));
+                    }
+                    agent.cargo = 0.0;
+                    agent.cargo_origin = None;
+                    agent.destination = None;
+                    agent.settlement = Some(dest_id);
+                } else {
+                    let (nc, nr) = step_toward(world, agent.col, agent.row, dc, dr);
+                    if world.is_land(nc, nr) {
+                        agent.col = nc;
+                        agent.row = nr;
+                    }
+                }
+            }
+            None => {
+                // Destination vanished; drop it and idle.
+                agent.destination = None;
+                agent.cargo = 0.0;
+                agent.cargo_origin = None;
+            }
+        }
+        return;
+    }
+
+    // No destination: at home, try to load and pick a new route.
+    let home_id = agent.settlement.unwrap();
+    let (hc, hr, stock) = settlements
+        .list
+        .iter()
+        .find(|s| s.id == home_id)
+        .map(|s| (s.col, s.row, s.stockpile))
+        .unwrap();
+
+    if (agent.col, agent.row) == (hc, hr) {
+        if stock >= MERCHANT_LOAD_MIN {
+            let others: Vec<u32> = settlements
+                .list
+                .iter()
+                .filter(|s| s.alive && s.id != home_id)
+                .map(|s| s.id)
+                .collect();
+            if !others.is_empty() {
+                let dest_id = others[rng.gen_range(0..others.len())];
+                let load = MERCHANT_CARGO.min(stock);
+                if let Some(h) = settlements.list.iter_mut().find(|s| s.id == home_id) {
+                    h.stockpile -= load;
+                }
+                agent.cargo = load;
+                agent.cargo_origin = Some(home_id);
+                agent.destination = Some(dest_id);
+            }
+        }
+    } else {
+        let (nc, nr) = step_toward(world, agent.col, agent.row, hc, hr);
+        if world.is_land(nc, nr) {
+            agent.col = nc;
+            agent.row = nr;
+        }
     }
 }
 

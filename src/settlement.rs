@@ -12,6 +12,13 @@ const CLUSTER_RADIUS: i32 = 2;
 const MIN_SEPARATION: i32 = 6;
 
 #[derive(Debug, Clone)]
+pub struct Route {
+    pub other_id: u32,
+    pub trips: u32,
+    pub declared: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct Settlement {
     pub id: u32,
     pub name: String,
@@ -20,6 +27,30 @@ pub struct Settlement {
     pub founded_tick: u64,
     pub population: u32,
     pub alive: bool,
+    pub stockpile: f32,
+    pub overflow_declared: bool,
+    pub routes: Vec<Route>,
+}
+
+impl Settlement {
+    pub fn note_trip(&mut self, other: u32) -> bool {
+        for r in self.routes.iter_mut() {
+            if r.other_id == other {
+                r.trips += 1;
+                if !r.declared && r.trips >= 3 {
+                    r.declared = true;
+                    return true;
+                }
+                return false;
+            }
+        }
+        self.routes.push(Route {
+            other_id: other,
+            trips: 1,
+            declared: false,
+        });
+        false
+    }
 }
 
 pub struct Settlements {
@@ -58,6 +89,9 @@ impl Settlements {
             founded_tick: tick,
             population: 0,
             alive: true,
+            stockpile: 0.0,
+            overflow_declared: false,
+            routes: Vec::new(),
         });
         id
     }
@@ -78,7 +112,7 @@ pub fn update_settlements(
     let unaffiliated: Vec<usize> = agents
         .iter()
         .enumerate()
-        .filter(|(_, a)| a.alive && a.settlement.is_none())
+        .filter(|(_, a)| a.alive && !a.merchant && a.settlement.is_none())
         .map(|(i, _)| i)
         .collect();
 
@@ -90,7 +124,7 @@ pub fn update_settlements(
         // Count nearby unaffiliated agents.
         let mut neighbors: Vec<usize> = Vec::new();
         for (j, other) in agents.iter().enumerate() {
-            if !other.alive || other.settlement.is_some() {
+            if !other.alive || other.merchant || other.settlement.is_some() {
                 continue;
             }
             if world.hex_distance((a.col, a.row), (other.col, other.row)) <= CLUSTER_RADIUS {
@@ -110,6 +144,10 @@ pub fn update_settlements(
             let id = settlements.found(ac, ar, tick, rng);
             for &j in &neighbors {
                 agents[j].settlement = Some(id);
+                // ~10% of founding members become merchants once the settlement exists.
+                if rng.gen_bool(0.10) {
+                    agents[j].merchant = true;
+                }
             }
             let s = settlements
                 .list
@@ -141,6 +179,22 @@ pub fn update_settlements(
 
     // Migration: if a settlement's people are starving, some depart to wander.
     migrate_from_starving(settlements, agents, world, rng, chronicle, tick);
+
+    // Granary overflow chronicling.
+    for s in settlements.list.iter_mut() {
+        if !s.alive {
+            continue;
+        }
+        if s.stockpile > 40.0 && !s.overflow_declared {
+            s.overflow_declared = true;
+            chronicle.record(Event::new(
+                tick,
+                format!("The granary of {} overflows with autumn harvest.", s.name),
+            ));
+        } else if s.stockpile < 20.0 && s.overflow_declared {
+            s.overflow_declared = false;
+        }
+    }
 
     // Recount populations and retire any settlement that's lost all its people.
     for s in settlements.list.iter_mut() {
@@ -214,7 +268,7 @@ fn migrate_from_starving(
         let members: Vec<usize> = agents
             .iter()
             .enumerate()
-            .filter(|(_, a)| a.alive && a.settlement == Some(sid))
+            .filter(|(_, a)| a.alive && !a.merchant && a.settlement == Some(sid))
             .map(|(i, _)| i)
             .collect();
         if members.len() < MIN_POP_TO_MIGRATE as usize {
