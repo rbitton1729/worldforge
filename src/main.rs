@@ -141,6 +141,13 @@ fn main() {
             tick,
         );
 
+        chronicle.set_header_stats(alive_count(&agents), settlements.alive_count());
+
+        // Settlement population reports twice a year (every 2 seasons = 50 ticks).
+        if tick % (chronicle::TICKS_PER_YEAR / 2) == 0 {
+            report_settlements(&settlements, &mut chronicle, tick);
+        }
+
         // Once per year, report on the state of the world if it's changed meaningfully.
         let year = tick / chronicle::TICKS_PER_YEAR + 1;
         if tick % chronicle::TICKS_PER_YEAR == 0 && year != last_report_year {
@@ -188,6 +195,41 @@ fn main() {
             if elapsed < d {
                 std::thread::sleep(d - elapsed);
             }
+        }
+    }
+}
+
+fn report_settlements(settlements: &Settlements, chronicle: &mut Chronicle, tick: u64) {
+    // Pick a handful of notable settlements to narrate rather than listing all.
+    let mut alive: Vec<&settlement::Settlement> =
+        settlements.list.iter().filter(|s| s.alive).collect();
+    if alive.is_empty() {
+        return;
+    }
+    alive.sort_by_key(|s| std::cmp::Reverse(s.population));
+    // Report the largest and, if there's one struggling, the smallest.
+    let largest = alive.first().copied();
+    let smallest = alive.iter().rev().copied().next();
+
+    if let Some(s) = largest {
+        let verb = if s.population >= 30 {
+            "thrives with"
+        } else if s.population >= 10 {
+            "holds"
+        } else {
+            "endures with"
+        };
+        chronicle.record(Event::new(
+            tick,
+            format!("{} {} {} souls.", s.name, verb, s.population),
+        ));
+    }
+    if let Some(s) = smallest {
+        if alive.len() > 1 && s.population <= 4 {
+            chronicle.record(Event::new(
+                tick,
+                format!("{} dwindles to {} inhabitants.", s.name, s.population),
+            ));
         }
     }
 }

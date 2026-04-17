@@ -98,7 +98,16 @@ pub fn update_settlements(
             }
         }
         if neighbors.len() >= FOUND_THRESHOLD && !settlements.too_close(world, a.col, a.row) {
-            let id = settlements.found(a.col, a.row, tick, rng);
+            let (ac, ar) = (a.col, a.row);
+            // Find nearest existing alive settlement before we add a new one.
+            let nearest = settlements
+                .list
+                .iter()
+                .filter(|s| s.alive)
+                .map(|s| (s.name.clone(), world.hex_distance((s.col, s.row), (ac, ar))))
+                .min_by_key(|(_, d)| *d);
+
+            let id = settlements.found(ac, ar, tick, rng);
             for &j in &neighbors {
                 agents[j].settlement = Some(id);
             }
@@ -111,17 +120,27 @@ pub fn update_settlements(
                 .tile(s.col, s.row)
                 .map(|t| t.biome.name())
                 .unwrap_or("unknown land");
+            let locator = match nearest {
+                Some((other_name, d)) if d <= 15 => {
+                    let days = describe_distance(d);
+                    format!(" {} from {}", days, other_name)
+                }
+                _ => format!(" upon the {}", biome),
+            };
             chronicle.record(Event::new(
                 tick,
                 format!(
-                    "A band of {} settlers gathers upon the {}. They name the place {}.",
+                    "A band of {} settlers gathers{}. They name the place {}.",
                     neighbors.len(),
-                    biome,
+                    locator,
                     s.name
                 ),
             ));
         }
     }
+
+    // Migration: if a settlement's people are starving, some depart to wander.
+    migrate_from_starving(settlements, agents, world, rng, chronicle, tick);
 
     // Recount populations and retire any settlement that's lost all its people.
     for s in settlements.list.iter_mut() {
@@ -157,6 +176,89 @@ pub fn update_settlements(
                 }
             }
         }
+    }
+}
+
+/// Rough human-scale distance description.
+fn describe_distance(hexes: i32) -> &'static str {
+    match hexes {
+        0..=2 => "just a short walk",
+        3..=5 => "a half-day's walk",
+        6..=9 => "a day's walk",
+        10..=15 => "several days' walk",
+        _ => "a long journey",
+    }
+}
+
+/// Members of settlements whose average hunger is high peel off and wander as unaffiliated.
+fn migrate_from_starving(
+    settlements: &mut Settlements,
+    agents: &mut [Agent],
+    world: &World,
+    rng: &mut ChaCha8Rng,
+    chronicle: &mut Chronicle,
+    tick: u64,
+) {
+    const STARVE_AVG_HUNGER: f32 = 60.0;
+    const MIN_POP_TO_MIGRATE: u32 = 4;
+
+    // Gather per-settlement avg hunger & member indices.
+    let alive_ids: Vec<u32> = settlements
+        .list
+        .iter()
+        .filter(|s| s.alive && s.population >= MIN_POP_TO_MIGRATE)
+        .map(|s| s.id)
+        .collect();
+
+    for sid in alive_ids {
+        let members: Vec<usize> = agents
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.alive && a.settlement == Some(sid))
+            .map(|(i, _)| i)
+            .collect();
+        if members.len() < MIN_POP_TO_MIGRATE as usize {
+            continue;
+        }
+        let avg_hunger: f32 =
+            members.iter().map(|&i| agents[i].hunger).sum::<f32>() / members.len() as f32;
+        if avg_hunger < STARVE_AVG_HUNGER {
+            continue;
+        }
+        // ~25% of the hungriest depart.
+        let mut by_hunger: Vec<usize> = members.clone();
+        by_hunger.sort_by(|&a, &b| agents[b].hunger.partial_cmp(&agents[a].hunger).unwrap());
+        let departing = (by_hunger.len() / 4).max(1);
+        let leavers: Vec<usize> = by_hunger.into_iter().take(departing).collect();
+
+        let sname = settlements
+            .list
+            .iter()
+            .find(|s| s.id == sid)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
+
+        for &i in &leavers {
+            agents[i].settlement = None;
+            // Nudge them to a passable neighbor so they begin drifting.
+            let neigh: Vec<(i32, i32)> = world
+                .neighbors(agents[i].col, agents[i].row)
+                .into_iter()
+                .filter(|&(c, r)| world.is_land(c, r))
+                .collect();
+            if !neigh.is_empty() {
+                let (nc, nr) = neigh[rng.gen_range(0..neigh.len())];
+                agents[i].col = nc;
+                agents[i].row = nr;
+            }
+        }
+
+        let n = leavers.len();
+        let noun = if n == 1 { "soul departs" } else { "souls depart" };
+        chronicle.record(Event::new(
+            tick,
+            format!("{} {} the starving halls of {}.", n, noun, sname),
+        ));
     }
 }
 

@@ -33,6 +33,7 @@ const FOOD_TO_HUNGER: f32 = 15.0;
 #[derive(Debug, Clone)]
 pub struct Agent {
     pub id: u32,
+    pub name: String,
     pub col: i32,
     pub row: i32,
     pub hunger: f32,
@@ -44,9 +45,10 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub fn new(id: u32, col: i32, row: i32, max_age: u32) -> Self {
+    pub fn new(id: u32, name: String, col: i32, row: i32, max_age: u32) -> Self {
         Self {
             id,
+            name,
             col,
             row,
             hunger: 20.0,
@@ -57,6 +59,21 @@ impl Agent {
             settlement: None,
         }
     }
+}
+
+const FIRST_NAMES: &[&str] = &[
+    "Elara", "Bran", "Cael", "Dara", "Eryn", "Fenn", "Gwyn", "Halla", "Ivor", "Jora",
+    "Kiran", "Lyra", "Maren", "Nyx", "Oren", "Perrin", "Quill", "Rhea", "Soren", "Tamsin",
+    "Ulric", "Vesna", "Wyl", "Xan", "Yarrow", "Zephyr", "Alden", "Briar", "Corin", "Doran",
+    "Eira", "Faye", "Gale", "Hollis", "Isolde", "Jareth", "Kestrel", "Linnea", "Merrick", "Nerys",
+    "Osric", "Piran", "Rowan", "Saela", "Torren", "Una", "Vale", "Wren", "Yves", "Zinna",
+    "Astra", "Bryn", "Caden", "Delia", "Emric", "Fable", "Garrick", "Hale", "Indra", "Joren",
+    "Kael", "Lune", "Mira", "Nolan", "Orla", "Phelan", "Rune", "Sable", "Thane", "Ursa",
+    "Varen", "Willa", "Yorick", "Zara",
+];
+
+pub fn pick_name(rng: &mut ChaCha8Rng) -> String {
+    FIRST_NAMES[rng.gen_range(0..FIRST_NAMES.len())].to_string()
 }
 
 fn roll_lifespan(rng: &mut ChaCha8Rng) -> u32 {
@@ -134,8 +151,8 @@ pub fn step_agents(
             chronicle.record(Event::new(
                 tick,
                 format!(
-                    "Soul #{} dies of old age at {} years, on the {} near ({}, {}).",
-                    agent.id,
+                    "{} dies of old age at {} years, on the {} near ({}, {}).",
+                    agent.name,
                     agent.age as u64 / crate::chronicle::TICKS_PER_YEAR,
                     world
                         .tile(agent.col, agent.row)
@@ -153,8 +170,8 @@ pub fn step_agents(
             chronicle.record(Event::new(
                 tick,
                 format!(
-                    "Soul #{} perishes of hunger on the {} near ({}, {}).",
-                    agent.id,
+                    "{} perishes of hunger on the {} near ({}, {}).",
+                    agent.name,
                     world
                         .tile(agent.col, agent.row)
                         .map(|t| t.biome.name())
@@ -176,7 +193,13 @@ pub fn step_agents(
                     && world.hex_distance((agent.col, agent.row), (c, r)) <= REPRO_RADIUS
             });
             if has_partner {
-                let mut child = Agent::new(next_id, agent.col, agent.row, roll_lifespan(rng));
+                let mut child = Agent::new(
+                    next_id,
+                    pick_name(rng),
+                    agent.col,
+                    agent.row,
+                    roll_lifespan(rng),
+                );
                 child.hunger = 35.0;
                 child.settlement = agent.settlement;
                 next_id += 1;
@@ -268,7 +291,7 @@ pub fn seed_agents(world: &World, n: u32, rng: &mut ChaCha8Rng) -> Vec<Agent> {
         if let Some(tile) = world.tile(col, row) {
             if tile.biome.is_passable() && tile.biome.food_cap() > 0.0 {
                 // Stagger starting ages so the founding generation doesn't all die at once.
-                let mut agent = Agent::new(placed, col, row, roll_lifespan(rng));
+                let mut agent = Agent::new(placed, pick_name(rng), col, row, roll_lifespan(rng));
                 agent.age = rng.gen_range(0..LIFESPAN_BASE / 2);
                 out.push(agent);
                 placed += 1;

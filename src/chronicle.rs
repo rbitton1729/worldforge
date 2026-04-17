@@ -23,6 +23,7 @@ pub struct Chronicle {
     writer: Box<dyn Write>,
     pending: Vec<Event>,
     last_header: Option<(u64, u64)>, // (year, season_index)
+    header_stats: Option<(usize, usize)>, // (alive souls, alive settlements)
 }
 
 impl Chronicle {
@@ -31,6 +32,7 @@ impl Chronicle {
             writer: Box::new(BufWriter::new(io::stdout())),
             pending: Vec::new(),
             last_header: None,
+            header_stats: None,
         }
     }
 
@@ -40,11 +42,17 @@ impl Chronicle {
             writer: Box::new(BufWriter::new(file)),
             pending: Vec::new(),
             last_header: None,
+            header_stats: None,
         })
     }
 
     pub fn record(&mut self, event: Event) {
         self.pending.push(event);
+    }
+
+    /// Update the souls/settlements counts woven into the next season header.
+    pub fn set_header_stats(&mut self, alive_souls: usize, alive_settlements: usize) {
+        self.header_stats = Some((alive_souls, alive_settlements));
     }
 
     /// Emit a top-level line (no season header). Useful for prologue and epilogue.
@@ -65,11 +73,18 @@ impl Chronicle {
         let header_key = (year, season_idx);
 
         if self.last_header != Some(header_key) {
-            writeln!(
-                self.writer,
-                "\n--- Year {}, {} ---",
-                year, SEASONS[season_idx as usize]
-            )?;
+            match self.header_stats {
+                Some((souls, settlements)) => writeln!(
+                    self.writer,
+                    "\n--- Year {}, {} — {} souls across {} settlements ---",
+                    year, SEASONS[season_idx as usize], souls, settlements
+                )?,
+                None => writeln!(
+                    self.writer,
+                    "\n--- Year {}, {} ---",
+                    year, SEASONS[season_idx as usize]
+                )?,
+            }
             self.last_header = Some(header_key);
         }
 
