@@ -138,6 +138,72 @@ release:
           filepath: /worldforge-linux-arm64
           link_type: package
 
+aur:
+  stage: publish
+  image: archlinux:latest
+  needs:
+    - job: upload
+  rules:
+    # Only push to AUR on stable semver tags, not pre-release / rc tags.
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+  script:
+    - pacman -Sy --noconfirm openssh git
+    - mkdir -p ~/.ssh
+    # Same SSH key as the FreeBSD VM — the public half is registered both on
+    # bsd-1's gitlab-ci user and on the AUR account. AUR auth is per-user
+    # (not per-package), so one key covers every package on the rbitton AUR
+    # account.
+    - cp "$BSD_SSH_PRIVATE_KEY" ~/.ssh/id_ed25519
+    - chmod 600 ~/.ssh/id_ed25519
+    - echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" >> ~/.ssh/known_hosts
+    - git config --global user.name "Raphael Bitton"
+    - git config --global user.email "$AUR_EMAIL"
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - git clone ssh://aur@aur.archlinux.org/worldforge.git aur-repo
+    - cd aur-repo
+    - cp "${CI_PROJECT_DIR}/aur/worldforge/PKGBUILD" .
+    - sed -i "s/^pkgver=.*/pkgver=${VERSION}/" PKGBUILD
+    - useradd -m builder
+    - chown -R builder:builder .
+    - su builder -c "makepkg --printsrcinfo > .SRCINFO"
+    - chown -R root:root .
+    - git add PKGBUILD .SRCINFO
+    - git commit -m "Update to ${VERSION}"
+    - git push
+
+aur-bin:
+  stage: publish
+  image: archlinux:latest
+  needs:
+    - job: build:x86_64
+      artifacts: true
+    - job: upload
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+  script:
+    - pacman -Sy --noconfirm openssh git curl
+    - mkdir -p ~/.ssh
+    - cp "$BSD_SSH_PRIVATE_KEY" ~/.ssh/id_ed25519
+    - chmod 600 ~/.ssh/id_ed25519
+    - echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" >> ~/.ssh/known_hosts
+    - git config --global user.name "Raphael Bitton"
+    - git config --global user.email "$AUR_EMAIL"
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - BINARY_SHA256=$(cat "${CI_PROJECT_DIR}/worldforge-linux-amd64.sha256")
+    - LICENSE_SHA256=$(curl -sL "https://git.skylantix.com/hermes/worldforge/-/raw/v${VERSION}/LICENSE" | sha256sum | cut -d' ' -f1)
+    - git clone ssh://aur@aur.archlinux.org/worldforge-bin.git aur-repo
+    - cd aur-repo
+    - cp "${CI_PROJECT_DIR}/aur/worldforge-bin/PKGBUILD" .
+    - sed -i "s/^pkgver=.*/pkgver=${VERSION}/" PKGBUILD
+    - sed -i "s/^sha256sums=.*/sha256sums=('${BINARY_SHA256}' '${LICENSE_SHA256}')/" PKGBUILD
+    - useradd -m builder
+    - chown -R builder:builder .
+    - su builder -c "makepkg --printsrcinfo > .SRCINFO"
+    - chown -R root:root .
+    - git add PKGBUILD .SRCINFO
+    - git commit -m "Update to ${VERSION}"
+    - git push
+
 crates_io:
   stage: publish
   image: rust:latest

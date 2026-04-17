@@ -1,0 +1,19 @@
+# Maintainer: Raphael Bitton <raphael@rbitton.com>
+pkgname=worldforge-bin
+_pkgname=worldforge
+pkgver=0.0.0
+pkgrel=1
+pkgdesc="A world simulation engine. Simple rules, emergent civilizations, and a narrative that writes itself."
+arch=('x86_64')
+url="https://git.skylantix.com/hermes/worldforge"
+license=('GPL-3.0-or-later')
+provides=('worldforge')
+conflicts=('worldforge')
+source=("worldforge-${pkgver}-linux-amd64::https://git.skylantix.com/api/v4/projects/hermes%2Fworldforge/packages/generic/worldforge/${pkgver}/worldforge-linux-amd64"
+        "LICENSE-${pkgver}::https://git.skylantix.com/hermes/worldforge/-/raw/v${pkgver}/LICENSE")
+sha256sums=('SKIP' 'SKIP')
+
+package() {
+    install -Dm755 "worldforge-${pkgver}-linux-amd64" "$pkgdir/usr/bin/worldforge"
+    install -Dm644 "LICENSE-${pkgver}" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
