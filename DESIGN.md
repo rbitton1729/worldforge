@@ -202,6 +202,73 @@ OPTIONS:
 - Real-time stats
 - Interactive controls (pause, speed up, zoom)
 
+## Evolution Philosophy
+
+**The cardinal rule: define the pressures, not the outcomes.**
+
+There is no tech tree. No advancement stages. No predetermined path from village to empire. Evolution is entirely emergent from agent behavior and environmental pressure.
+
+### Population as the primary driver
+
+- Agents reproduce when well-fed and near others
+- Population grows → needs more food → needs more territory
+- Population overshoots carrying capacity → famine → die-off → recovery
+- This alone creates boom/bust cycles without any scripted events
+
+### Settlements evolve through what they build, not what they "unlock"
+
+- A settlement with food surplus attracts more agents
+- More agents → more labor → someone builds a granary
+- Granary → survives longer winters → grows bigger
+- Eventually walls (if raided), markets (if merchants visit)
+- No one decides "now we build walls." It happens because conditions demand it.
+
+### Agent specialization is behavioral, not assigned
+
+- An agent that keeps finding food near fertile land → stays there → becomes a "farmer"
+- An agent that keeps fighting → gets better at it → becomes a "warrior"
+- Skills compound through repetition, like muscle memory
+- Roles emerge from geography and circumstance, not from a class picker
+
+### Resources create territory pressure
+
+- Fertile land is finite. Good spots get claimed.
+- Settlements with good land thrive. Settlements on poor land struggle.
+- Struggling settlements either innovate (trade), migrate, or die.
+- Conflict happens at the edges where territories meet over contested resources.
+
+### The world is mostly static — agents reshape it
+
+- Terrain doesn't change (mostly). Forests can be depleted by over-harvesting.
+- But the *meaning* of a tile changes: a forest near a growing settlement becomes farmland through use
+- Climate shifts on very long timescales — not in a gamey "ice age event" way, just slow drift
+
+### Emergent "ages" (not designed)
+
+Instead of "Bronze Age → Iron Age," you see patterns like:
+
+1. **Early:** scattered foragers, no settlements
+2. **Settlement:** clusters form, basic farming
+3. **Expansion:** settlements grow, territories bump into each other
+4. **Conflict:** raids over resources, alliances form
+5. **Trade:** surviving settlements specialize and exchange
+6. **Collapse:** overextension, famine, wars drain populations
+7. **Recovery:** new settlements form in the aftermath
+
+These "ages" aren't programmed — they're what naturally happens with limited resources and agents that need things. The goal is to create conditions for narrative to emerge.
+
+### What is deliberately excluded
+
+- No explicit technology progression
+- No civilization "levels" or advancement stages
+- No predetermined path from village to empire
+- No events that fire at specific times
+- No script-driven narrative beats
+
+### The risk
+
+The simulation might produce chaos instead of narrative — random death spirals with no interesting patterns. If that happens, we tune the rules, not script events. The philosophy is: **define the pressures, not the outcomes.**
+
 ## Open Questions
 
 - How fast should time pass? Real-time vs tick-based with user control?
