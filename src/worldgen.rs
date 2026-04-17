@@ -89,14 +89,14 @@ fn edge_falloff(x: f32, y: f32, w: f32, h: f32) -> f32 {
     let ny = (y / (h - 1.0)) * 2.0 - 1.0;
     let d = (nx * nx + ny * ny).sqrt();
     // 1.0 at center, decays toward 0 near edges.
-    (1.0 - d * 0.65).clamp(0.0, 1.0)
+    (1.0 - d * 0.55).clamp(0.0, 1.0)
 }
 
 fn pick_biome(elevation: f32, temperature: f32, moisture: f32) -> Biome {
-    if elevation < 0.32 {
+    if elevation < 0.30 {
         return Biome::Ocean;
     }
-    if elevation < 0.36 {
+    if elevation < 0.34 {
         return Biome::Coast;
     }
     if elevation > 0.82 {

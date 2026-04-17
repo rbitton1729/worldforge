@@ -224,12 +224,11 @@ pub fn update_settlements(
         .map(|(i, _)| i)
         .collect();
 
+    // Gather every eligible cluster (size + not too close to existing settlements),
+    // then found only the largest one this tick. Deliberate pacing.
+    let mut best: Option<(usize, i32, i32, Vec<usize>)> = None;
     for &i in &unaffiliated {
         let a = &agents[i];
-        if !a.alive || a.settlement.is_some() {
-            continue;
-        }
-        // Count nearby unaffiliated agents.
         let mut neighbors: Vec<usize> = Vec::new();
         for (j, other) in agents.iter().enumerate() {
             if !other.alive || other.merchant || other.settlement.is_some() {
@@ -240,51 +239,58 @@ pub fn update_settlements(
             }
         }
         if neighbors.len() >= FOUND_THRESHOLD && !settlements.too_close(world, a.col, a.row) {
-            let (ac, ar) = (a.col, a.row);
-            // Find nearest existing alive settlement before we add a new one.
-            let nearest = settlements
-                .list
-                .iter()
-                .filter(|s| s.alive)
-                .map(|s| (s.name.clone(), world.hex_distance((s.col, s.row), (ac, ar))))
-                .min_by_key(|(_, d)| *d);
-
-            let id = settlements.found(ac, ar, tick, rng);
-            for &j in &neighbors {
-                agents[j].settlement = Some(id);
-                // ~10% of founding members become merchants, ~15% warriors.
-                if rng.gen_bool(0.10) {
-                    agents[j].merchant = true;
-                } else if rng.gen_bool(0.15) {
-                    agents[j].warrior = true;
-                }
-            }
-            let s = settlements
-                .list
-                .iter()
-                .find(|s| s.id == id)
-                .expect("just pushed");
-            let biome = world
-                .tile(s.col, s.row)
-                .map(|t| t.biome.name())
-                .unwrap_or("unknown land");
-            let locator = match nearest {
-                Some((other_name, d)) if d <= 15 => {
-                    let days = describe_distance(d);
-                    format!(" {} from {}", days, other_name)
-                }
-                _ => format!(" upon the {}", biome),
+            let better = match &best {
+                None => true,
+                Some((n, _, _, _)) => neighbors.len() > *n,
             };
-            chronicle.record(Event::new(
-                tick,
-                format!(
-                    "A band of {} settlers gathers{}. They name the place {}.",
-                    neighbors.len(),
-                    locator,
-                    s.name
-                ),
-            ));
+            if better {
+                best = Some((neighbors.len(), a.col, a.row, neighbors));
+            }
         }
+    }
+
+    if let Some((_n, ac, ar, neighbors)) = best {
+        let nearest = settlements
+            .list
+            .iter()
+            .filter(|s| s.alive)
+            .map(|s| (s.name.clone(), world.hex_distance((s.col, s.row), (ac, ar))))
+            .min_by_key(|(_, d)| *d);
+
+        let id = settlements.found(ac, ar, tick, rng);
+        for &j in &neighbors {
+            agents[j].settlement = Some(id);
+            if rng.gen_bool(0.10) {
+                agents[j].merchant = true;
+            } else if rng.gen_bool(0.15) {
+                agents[j].warrior = true;
+            }
+        }
+        let s = settlements
+            .list
+            .iter()
+            .find(|s| s.id == id)
+            .expect("just pushed");
+        let biome = world
+            .tile(s.col, s.row)
+            .map(|t| t.biome.name())
+            .unwrap_or("unknown land");
+        let locator = match nearest {
+            Some((other_name, d)) if d <= 15 => {
+                let days = describe_distance(d);
+                format!(" {} from {}", days, other_name)
+            }
+            _ => format!(" upon the {}", biome),
+        };
+        chronicle.record(Event::new(
+            tick,
+            format!(
+                "A band of {} settlers gathers{}. They name the place {}.",
+                neighbors.len(),
+                locator,
+                s.name
+            ),
+        ));
     }
 
     // Raids between settlements.
@@ -490,10 +496,20 @@ fn raid_phase(
         .collect();
 
     for (raider_id, rc, rr, _rstock) in candidates {
-        // Re-check raider (prior iterations may have destroyed it).
-        if !settlements.list.iter().any(|s| s.id == raider_id && s.alive) {
+        // Re-check raider: prior iterations may have destroyed it, or filled its
+        // stockpile via loot so it's no longer hungry enough to raid again.
+        let current_stock = match settlements
+            .list
+            .iter()
+            .find(|s| s.id == raider_id && s.alive)
+        {
+            Some(s) => s.stockpile,
+            None => continue,
+        };
+        if current_stock >= RAID_HUNGER_STOCK {
             continue;
         }
+        let _rstock = current_stock;
         let attackers = count_warriors(agents, raider_id);
         if attackers < RAID_MIN_WARRIORS {
             continue;
