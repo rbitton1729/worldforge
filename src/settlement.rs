@@ -1,8 +1,23 @@
-use crate::agent::Agent;
+use crate::agent::{Agent, WARRIOR_CHANCE};
 use crate::chronicle::{Chronicle, Event};
 use crate::world::World;
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
+
+/// Trips on a declared route beyond which the two settlements pledge alliance.
+const ALLIANCE_TRIPS: u32 = 8;
+/// Maximum hex distance between settlements for a raid to be launched.
+const RAID_MAX_DISTANCE: i32 = 12;
+/// Stockpile below which a settlement becomes hungry enough to consider raiding.
+const RAID_HUNGER_STOCK: f32 = 12.0;
+/// Target must hold at least this much to be worth raiding.
+const RAID_TARGET_STOCK: f32 = 25.0;
+/// A raider settlement must muster this many warriors to attempt a raid.
+const RAID_MIN_WARRIORS: u32 = 1;
+/// Per-tick chance of rolling for a raid when conditions are met.
+const RAID_CHANCE: f64 = 0.030;
+/// Raids accumulated before a blood feud is declared.
+const BLOOD_FEUD_THRESHOLD: u32 = 2;
 
 /// Minimum loyal / nearby agents required to found a settlement.
 const FOUND_THRESHOLD: usize = 5;
@@ -16,6 +31,14 @@ pub struct Route {
     pub other_id: u32,
     pub trips: u32,
     pub declared: bool,
+    pub allied: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct Enmity {
+    pub other_id: u32,
+    pub raids: u32,
+    pub blood_feud: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -30,24 +53,58 @@ pub struct Settlement {
     pub stockpile: f32,
     pub overflow_declared: bool,
     pub routes: Vec<Route>,
+    pub enmities: Vec<Enmity>,
+}
+
+/// Signals emitted when a trade trip is recorded.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TripSignal {
+    pub road_formed: bool,
+    pub alliance_formed: bool,
 }
 
 impl Settlement {
-    pub fn note_trip(&mut self, other: u32) -> bool {
+    pub fn note_trip(&mut self, other: u32) -> TripSignal {
+        let mut sig = TripSignal::default();
         for r in self.routes.iter_mut() {
             if r.other_id == other {
                 r.trips += 1;
                 if !r.declared && r.trips >= 3 {
                     r.declared = true;
-                    return true;
+                    sig.road_formed = true;
                 }
-                return false;
+                if !r.allied && r.trips >= ALLIANCE_TRIPS {
+                    r.allied = true;
+                    sig.alliance_formed = true;
+                }
+                return sig;
             }
         }
         self.routes.push(Route {
             other_id: other,
             trips: 1,
             declared: false,
+            allied: false,
+        });
+        sig
+    }
+
+    /// Record a raid against `other`; returns true if a blood feud was just declared.
+    pub fn note_raid(&mut self, other: u32) -> bool {
+        for e in self.enmities.iter_mut() {
+            if e.other_id == other {
+                e.raids += 1;
+                if !e.blood_feud && e.raids >= BLOOD_FEUD_THRESHOLD {
+                    e.blood_feud = true;
+                    return true;
+                }
+                return false;
+            }
+        }
+        self.enmities.push(Enmity {
+            other_id: other,
+            raids: 1,
+            blood_feud: false,
         });
         false
     }
@@ -92,6 +149,7 @@ impl Settlements {
             stockpile: 0.0,
             overflow_declared: false,
             routes: Vec::new(),
+            enmities: Vec::new(),
         });
         id
     }
@@ -144,9 +202,11 @@ pub fn update_settlements(
             let id = settlements.found(ac, ar, tick, rng);
             for &j in &neighbors {
                 agents[j].settlement = Some(id);
-                // ~10% of founding members become merchants once the settlement exists.
+                // ~10% of founding members become merchants, ~15% warriors.
                 if rng.gen_bool(0.10) {
                     agents[j].merchant = true;
+                } else if rng.gen_bool(0.15) {
+                    agents[j].warrior = true;
                 }
             }
             let s = settlements
@@ -176,6 +236,9 @@ pub fn update_settlements(
             ));
         }
     }
+
+    // Raids between settlements.
+    raid_phase(settlements, agents, world, rng, chronicle, tick);
 
     // Migration: if a settlement's people are starving, some depart to wander.
     migrate_from_starving(settlements, agents, world, rng, chronicle, tick);
@@ -313,6 +376,242 @@ fn migrate_from_starving(
             tick,
             format!("{} {} the starving halls of {}.", n, noun, sname),
         ));
+    }
+}
+
+/// Count living warriors affiliated with settlement `sid`.
+fn count_warriors(agents: &[Agent], sid: u32) -> u32 {
+    agents
+        .iter()
+        .filter(|a| a.alive && a.warrior && a.settlement == Some(sid))
+        .count() as u32
+}
+
+/// Kill up to `n` warriors belonging to settlement `sid`, returning how many fell.
+fn slay_warriors(agents: &mut [Agent], sid: u32, n: u32) -> u32 {
+    let mut killed = 0u32;
+    for a in agents.iter_mut() {
+        if killed >= n {
+            break;
+        }
+        if a.alive && a.warrior && a.settlement == Some(sid) {
+            a.alive = false;
+            killed += 1;
+        }
+    }
+    killed
+}
+
+/// Hungry settlements with warriors may raid a nearby wealthy neighbor.
+fn raid_phase(
+    settlements: &mut Settlements,
+    agents: &mut [Agent],
+    world: &World,
+    rng: &mut ChaCha8Rng,
+    chronicle: &mut Chronicle,
+    tick: u64,
+) {
+    // Snapshot candidate raiders to avoid borrow issues during resolution.
+    let candidates: Vec<(u32, i32, i32, f32)> = settlements
+        .list
+        .iter()
+        .filter(|s| s.alive && s.stockpile < RAID_HUNGER_STOCK)
+        .map(|s| (s.id, s.col, s.row, s.stockpile))
+        .collect();
+
+    for (raider_id, rc, rr, _rstock) in candidates {
+        // Re-check raider (prior iterations may have destroyed it).
+        if !settlements.list.iter().any(|s| s.id == raider_id && s.alive) {
+            continue;
+        }
+        let attackers = count_warriors(agents, raider_id);
+        if attackers < RAID_MIN_WARRIORS {
+            continue;
+        }
+        if !rng.gen_bool(RAID_CHANCE) {
+            continue;
+        }
+
+        // Pick the richest non-allied neighbor in range.
+        let raider_allied: Vec<u32> = settlements
+            .list
+            .iter()
+            .find(|s| s.id == raider_id)
+            .map(|s| s.routes.iter().filter(|r| r.allied).map(|r| r.other_id).collect())
+            .unwrap_or_default();
+
+        let target_opt = settlements
+            .list
+            .iter()
+            .filter(|s| {
+                s.alive
+                    && s.id != raider_id
+                    && !raider_allied.contains(&s.id)
+                    && s.stockpile >= RAID_TARGET_STOCK
+                    && world.hex_distance((s.col, s.row), (rc, rr)) <= RAID_MAX_DISTANCE
+            })
+            .max_by(|a, b| a.stockpile.partial_cmp(&b.stockpile).unwrap())
+            .map(|s| s.id);
+
+        let Some(target_id) = target_opt else { continue };
+
+        let defenders = count_warriors(agents, target_id);
+
+        let raider_name = settlements
+            .list
+            .iter()
+            .find(|s| s.id == raider_id)
+            .map(|s| s.name.clone())
+            .unwrap();
+        let target_name = settlements
+            .list
+            .iter()
+            .find(|s| s.id == target_id)
+            .map(|s| s.name.clone())
+            .unwrap();
+
+        chronicle.record(Event::new(
+            tick,
+            format!(
+                "Warriors of {} descend upon {} under cover of night.",
+                raider_name, target_name
+            ),
+        ));
+
+        // Resolve: attacker roll vs defender roll + home advantage.
+        let atk_roll = attackers as f32 + rng.gen_range(0.0..3.0);
+        let def_roll = defenders as f32 + 1.0 + rng.gen_range(0.0..3.0);
+
+        let sack = attackers >= 3 && atk_roll >= def_roll * 2.0;
+        let success = atk_roll > def_roll;
+
+        if sack {
+            // Full sack: destroy defender, transfer stockpile, scatter civilians.
+            let (loot, t_col, t_row) = {
+                let t = settlements
+                    .list
+                    .iter_mut()
+                    .find(|s| s.id == target_id)
+                    .unwrap();
+                let loot = t.stockpile;
+                t.stockpile = 0.0;
+                t.alive = false;
+                (loot, t.col, t.row)
+            };
+            slay_warriors(agents, target_id, defenders);
+            // Surviving civilians of target lose affiliation.
+            for a in agents.iter_mut() {
+                if a.alive && a.settlement == Some(target_id) {
+                    a.settlement = None;
+                    a.merchant = false;
+                    a.warrior = false;
+                }
+            }
+            // Attacker loses a couple of warriors even in victory.
+            let atk_losses = rng.gen_range(0..=2).min(attackers.saturating_sub(1));
+            slay_warriors(agents, raider_id, atk_losses);
+            if let Some(r) = settlements.list.iter_mut().find(|s| s.id == raider_id) {
+                r.stockpile += loot;
+            }
+            chronicle.record(Event::new(
+                tick,
+                format!(
+                    "{} is put to the torch. The smoke rises above empty fields.",
+                    target_name
+                ),
+            ));
+            let _ = (t_col, t_row);
+            // Record enmity on raider (target is gone).
+            if let Some(r) = settlements.list.iter_mut().find(|s| s.id == raider_id) {
+                r.note_raid(target_id);
+            }
+        } else if success {
+            // Loot: take a chunk of defender stockpile.
+            let taken = {
+                let t = settlements
+                    .list
+                    .iter_mut()
+                    .find(|s| s.id == target_id)
+                    .unwrap();
+                let take = (t.stockpile * 0.5).min(20.0);
+                t.stockpile -= take;
+                take
+            };
+            if let Some(r) = settlements.list.iter_mut().find(|s| s.id == raider_id) {
+                r.stockpile += taken;
+            }
+            // Both sides suffer some warrior losses.
+            let atk_losses = rng.gen_range(0..=1);
+            let def_losses = rng.gen_range(1..=2).min(defenders.max(1));
+            slay_warriors(agents, raider_id, atk_losses);
+            slay_warriors(agents, target_id, def_losses);
+
+            chronicle.record(Event::new(
+                tick,
+                format!(
+                    "{} sacks the granary of {}, carrying off their stores.",
+                    raider_name, target_name
+                ),
+            ));
+
+            let feud_r = settlements
+                .list
+                .iter_mut()
+                .find(|s| s.id == raider_id)
+                .map(|s| s.note_raid(target_id))
+                .unwrap_or(false);
+            let feud_t = settlements
+                .list
+                .iter_mut()
+                .find(|s| s.id == target_id)
+                .map(|s| s.note_raid(raider_id))
+                .unwrap_or(false);
+            if feud_r || feud_t {
+                chronicle.record(Event::new(
+                    tick,
+                    format!(
+                        "A blood feud takes root between {} and {}.",
+                        raider_name, target_name
+                    ),
+                ));
+            }
+        } else {
+            // Repelled: attackers lose warriors, defenders lose a few too.
+            let atk_losses = rng.gen_range(2..=3).min(attackers);
+            let def_losses = rng.gen_range(0..=1);
+            slay_warriors(agents, raider_id, atk_losses);
+            slay_warriors(agents, target_id, def_losses);
+
+            chronicle.record(Event::new(
+                tick,
+                format!(
+                    "The defenders of {} repel the raiders with heavy losses.",
+                    target_name
+                ),
+            ));
+
+            let feud_r = settlements
+                .list
+                .iter_mut()
+                .find(|s| s.id == raider_id)
+                .map(|s| s.note_raid(target_id))
+                .unwrap_or(false);
+            let feud_t = settlements
+                .list
+                .iter_mut()
+                .find(|s| s.id == target_id)
+                .map(|s| s.note_raid(raider_id))
+                .unwrap_or(false);
+            if feud_r || feud_t {
+                chronicle.record(Event::new(
+                    tick,
+                    format!(
+                        "A blood feud takes root between {} and {}.",
+                        raider_name, target_name
+                    ),
+                ));
+            }
+        }
     }
 }
 

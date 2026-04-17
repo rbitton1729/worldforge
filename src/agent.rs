@@ -6,6 +6,10 @@ use rand_chacha::ChaCha8Rng;
 
 /// Probability a newly-born/seeded agent becomes a merchant.
 const MERCHANT_CHANCE: f64 = 0.10;
+/// Probability a newly-born/settlement-joining agent becomes a warrior.
+pub const WARRIOR_CHANCE: f64 = 0.10;
+/// Warriors try to stay within this hex radius of their settlement.
+const WARRIOR_PATROL_RADIUS: i32 = 3;
 /// Food units a merchant loads from a settlement stockpile in one trip.
 const MERCHANT_CARGO: f32 = 4.0;
 /// Minimum stockpile before a merchant will load cargo and depart.
@@ -51,6 +55,7 @@ pub struct Agent {
     pub alive: bool,
     pub settlement: Option<u32>,
     pub merchant: bool,
+    pub warrior: bool,
     pub cargo: f32,
     pub cargo_origin: Option<u32>,
     pub destination: Option<u32>,
@@ -70,6 +75,7 @@ impl Agent {
             alive: true,
             settlement: None,
             merchant: false,
+            warrior: false,
             cargo: 0.0,
             cargo_origin: None,
             destination: None,
@@ -140,8 +146,26 @@ pub fn step_agents(
                     agent.hunger = (agent.hunger - bite * FOOD_TO_HUNGER).max(0.0);
                 }
             } else {
-                // Move: seek food if starving, else wander.
-                let target = if starving {
+                // Warriors patrol near their settlement instead of ranging for food.
+                let home = agent.settlement.and_then(|sid| {
+                    settlements
+                        .list
+                        .iter()
+                        .find(|s| s.id == sid && s.alive)
+                        .map(|s| (s.col, s.row))
+                });
+                let far_from_home = match (agent.warrior, home) {
+                    (true, Some((hc, hr))) => {
+                        world.hex_distance((agent.col, agent.row), (hc, hr))
+                            > WARRIOR_PATROL_RADIUS
+                    }
+                    _ => false,
+                };
+
+                // Move: patrol home, seek food if starving, else wander.
+                let target = if far_from_home {
+                    home
+                } else if starving {
                     find_nearby_food(world, agent.col, agent.row, 3)
                 } else {
                     None
@@ -258,6 +282,8 @@ pub fn step_agents(
                 child.settlement = agent.settlement;
                 if agent.settlement.is_some() && rng.gen_bool(MERCHANT_CHANCE) {
                     child.merchant = true;
+                } else if agent.settlement.is_some() && rng.gen_bool(WARRIOR_CHANCE) {
+                    child.warrior = true;
                 }
                 next_id += 1;
                 // Parent pays a hunger cost for bearing a child.
@@ -353,12 +379,17 @@ fn step_merchant(
                     }
                     // Record the trip on both endpoints, and chronicle a new trade road once.
                     let mut road_formed = false;
+                    let mut alliance_formed = false;
                     if let Some(oid) = origin_id {
                         if let Some(o) = settlements.list.iter_mut().find(|s| s.id == oid) {
-                            road_formed |= o.note_trip(dest_id);
+                            let s = o.note_trip(dest_id);
+                            road_formed |= s.road_formed;
+                            alliance_formed |= s.alliance_formed;
                         }
                         if let Some(d) = settlements.list.iter_mut().find(|s| s.id == dest_id) {
-                            road_formed |= d.note_trip(oid);
+                            let s = d.note_trip(oid);
+                            road_formed |= s.road_formed;
+                            alliance_formed |= s.alliance_formed;
                         }
                     }
                     if road_formed {
@@ -366,6 +397,15 @@ fn step_merchant(
                             tick,
                             format!(
                                 "A trade road forms between {} and {}.",
+                                origin_name, dname
+                            ),
+                        ));
+                    }
+                    if alliance_formed {
+                        chronicle.record(Event::new(
+                            tick,
+                            format!(
+                                "{} and {} pledge mutual defense.",
                                 origin_name, dname
                             ),
                         ));
