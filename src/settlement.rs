@@ -45,6 +45,15 @@ pub struct Enmity {
     pub blood_feud: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Trait {
+    Militant,
+    Mercantile,
+}
+
+const TRAIT_RAIDS_THRESHOLD: u32 = 3;
+const TRAIT_TRADES_THRESHOLD: u32 = 8;
+
 #[derive(Debug, Clone)]
 pub struct Settlement {
     pub id: u32,
@@ -58,6 +67,13 @@ pub struct Settlement {
     pub overflow_declared: bool,
     pub routes: Vec<Route>,
     pub enmities: Vec<Enmity>,
+    pub raids_done: u32,
+    pub raids_suffered: u32,
+    pub trades_completed: u32,
+    pub population_peak: u32,
+    pub trait_kind: Option<Trait>,
+    pub legend_fifty: bool,
+    pub legend_crash: bool,
 }
 
 /// Signals emitted when a trade trip is recorded.
@@ -68,7 +84,30 @@ pub struct TripSignal {
 }
 
 impl Settlement {
+    /// Check for a newly-emerged cultural trait; returns the chronicle line if one appeared.
+    pub fn maybe_emerge_trait(&mut self) -> Option<String> {
+        if self.trait_kind.is_some() {
+            return None;
+        }
+        if self.raids_done >= TRAIT_RAIDS_THRESHOLD {
+            self.trait_kind = Some(Trait::Militant);
+            return Some(format!(
+                "{} earns a reputation as a warlike people.",
+                self.name
+            ));
+        }
+        if self.trades_completed >= TRAIT_TRADES_THRESHOLD {
+            self.trait_kind = Some(Trait::Mercantile);
+            return Some(format!(
+                "{} becomes known as a haven of trade.",
+                self.name
+            ));
+        }
+        None
+    }
+
     pub fn note_trip(&mut self, other: u32) -> TripSignal {
+        self.trades_completed += 1;
         let mut sig = TripSignal::default();
         for r in self.routes.iter_mut() {
             if r.other_id == other {
@@ -154,6 +193,13 @@ impl Settlements {
             overflow_declared: false,
             routes: Vec::new(),
             enmities: Vec::new(),
+            raids_done: 0,
+            raids_suffered: 0,
+            trades_completed: 0,
+            population_peak: 0,
+            trait_kind: None,
+            legend_fifty: false,
+            legend_crash: false,
         });
         id
     }
@@ -277,6 +323,23 @@ pub fn update_settlements(
             chronicle.record(Event::new(
                 tick,
                 format!("{} is abandoned. The wind moves through empty halls.", s.name),
+            ));
+        }
+        if pop > s.population_peak {
+            s.population_peak = pop;
+        }
+        if !s.legend_fifty && pop >= 50 {
+            s.legend_fifty = true;
+            chronicle.record(Event::new(
+                tick,
+                format!("*** {} swells beyond fifty souls ***", s.name),
+            ));
+        }
+        if !s.legend_crash && s.population_peak >= 20 && pop > 0 && pop < 10 {
+            s.legend_crash = true;
+            chronicle.record(Event::new(
+                tick,
+                format!("*** {} withers to a handful ***", s.name),
             ));
         }
         s.population = pop;
@@ -432,16 +495,7 @@ fn raid_phase(
         if attackers < RAID_MIN_WARRIORS {
             continue;
         }
-        let chance = if _rstock < RAID_FAMINE_STOCK {
-            (RAID_CHANCE * RAID_FAMINE_MULT).min(1.0)
-        } else {
-            RAID_CHANCE
-        };
-        if !rng.gen_bool(chance) {
-            continue;
-        }
-
-        // Pick target: prefer existing enemies in range, else the richest non-allied neighbor.
+        // Compute allied list early so we can weight chance by proximity of non-allied neighbors.
         let (raider_allied, raider_enemies): (Vec<u32>, Vec<u32>) = settlements
             .list
             .iter()
@@ -453,6 +507,33 @@ fn raid_phase(
                 )
             })
             .unwrap_or_default();
+
+        // Proximity multiplier: close neighbors make raids more likely.
+        let nearest_dist = settlements
+            .list
+            .iter()
+            .filter(|s| {
+                s.alive
+                    && s.id != raider_id
+                    && !raider_allied.contains(&s.id)
+                    && world.hex_distance((s.col, s.row), (rc, rr)) <= RAID_MAX_DISTANCE
+            })
+            .map(|s| world.hex_distance((s.col, s.row), (rc, rr)))
+            .min();
+        let proximity_mult = match nearest_dist {
+            Some(d) if d <= 4 => 3.0,
+            Some(d) if d <= 7 => 1.8,
+            _ => 1.0,
+        };
+        let base = if _rstock < RAID_FAMINE_STOCK {
+            RAID_CHANCE * RAID_FAMINE_MULT
+        } else {
+            RAID_CHANCE
+        };
+        let chance = (base * proximity_mult).min(1.0);
+        if !rng.gen_bool(chance) {
+            continue;
+        }
 
         let enemy_target = settlements
             .list
@@ -524,9 +605,17 @@ fn raid_phase(
         let atk_roll = attackers as f32 + rng.gen_range(0.0..3.0);
         let def_roll = defenders as f32 + 1.0 + rng.gen_range(0.0..3.0);
 
-        // Sack: attackers vastly outnumber defenders (3x or more).
-        let sack = attackers >= 3 && attackers >= defenders.saturating_mul(3);
+        // Sack: attackers outnumber defenders 2x or more.
+        let sack = attackers >= 3 && attackers >= defenders.saturating_mul(2);
         let success = atk_roll > def_roll;
+
+        // Bump aggregate counters used for trait emergence.
+        if let Some(r) = settlements.list.iter_mut().find(|s| s.id == raider_id) {
+            r.raids_done += 1;
+        }
+        if let Some(t) = settlements.list.iter_mut().find(|s| s.id == target_id) {
+            t.raids_suffered += 1;
+        }
 
         if sack {
             // Full sack: destroy defender, transfer stockpile, scatter civilians.
@@ -563,6 +652,10 @@ fn raid_phase(
                     target_name
                 ),
             ));
+            chronicle.record(Event::new(
+                tick,
+                format!("*** The Fall of {} ***", target_name),
+            ));
             let _ = (t_col, t_row);
             // Record enmity on raider (target is gone).
             if let Some(r) = settlements.list.iter_mut().find(|s| s.id == raider_id) {
@@ -596,6 +689,16 @@ fn raid_phase(
                     raider_name, target_name
                 ),
             ));
+            if atk_losses + def_losses >= 3 {
+                chronicle.record(Event::new(
+                    tick,
+                    format!(
+                        "*** The Battle of {} — {} warriors fall ***",
+                        target_name,
+                        atk_losses + def_losses
+                    ),
+                ));
+            }
 
             let feud_r = settlements
                 .list
@@ -632,6 +735,16 @@ fn raid_phase(
                     target_name
                 ),
             ));
+            if atk_losses + def_losses >= 3 {
+                chronicle.record(Event::new(
+                    tick,
+                    format!(
+                        "*** The Battle of {} — {} warriors fall ***",
+                        target_name,
+                        atk_losses + def_losses
+                    ),
+                ));
+            }
 
             let feud_r = settlements
                 .list
@@ -654,6 +767,21 @@ fn raid_phase(
                     ),
                 ));
             }
+        }
+
+        // Trait emergence after any raid outcome.
+        let lines: Vec<String> = [raider_id, target_id]
+            .iter()
+            .filter_map(|&sid| {
+                settlements
+                    .list
+                    .iter_mut()
+                    .find(|s| s.id == sid && s.alive)
+                    .and_then(|s| s.maybe_emerge_trait())
+            })
+            .collect();
+        for line in lines {
+            chronicle.record(Event::new(tick, line));
         }
     }
 }

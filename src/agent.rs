@@ -410,6 +410,22 @@ fn step_merchant(
                             ),
                         ));
                     }
+                    // Trait emergence: check both endpoints after the trade.
+                    if let Some(oid) = origin_id {
+                        let lines: Vec<String> = [oid, dest_id]
+                            .iter()
+                            .filter_map(|&sid| {
+                                settlements
+                                    .list
+                                    .iter_mut()
+                                    .find(|s| s.id == sid && s.alive)
+                                    .and_then(|s| s.maybe_emerge_trait())
+                            })
+                            .collect();
+                        for line in lines {
+                            chronicle.record(Event::new(tick, line));
+                        }
+                    }
                     agent.cargo = 0.0;
                     agent.cargo_origin = None;
                     agent.destination = None;
