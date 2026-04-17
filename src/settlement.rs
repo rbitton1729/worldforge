@@ -1,4 +1,4 @@
-use crate::agent::{Agent, WARRIOR_CHANCE};
+use crate::agent::Agent;
 use crate::chronicle::{Chronicle, Event, TICKS_PER_YEAR};
 use crate::world::World;
 use rand::Rng;

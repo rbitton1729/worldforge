@@ -66,6 +66,7 @@ pub struct Tile {
     pub temperature: f32,
     pub moisture: f32,
     pub food: f32,
+    pub river: u8,
 }
 
 pub struct World {
@@ -139,15 +140,75 @@ impl World {
         self.tile(col, row).map_or(false, |t| t.biome.is_passable())
     }
 
+    /// Check if a tile has a river on it or is adjacent to one.
+    pub fn is_near_river(&self, col: i32, row: i32) -> bool {
+        if let Some(i) = self.idx(col, row) {
+            if self.tiles[i].river > 0 {
+                return true;
+            }
+        }
+        for (nc, nr) in self.neighbors(col, row) {
+            if let Some(ni) = self.idx(nc, nr) {
+                if self.tiles[ni].river > 0 {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub fn regen_food(&mut self, tick: u64) {
         let factor = season_regen_factor(tick);
-        for tile in &mut self.tiles {
-            let regen = tile.biome.food_regen() * factor;
-            let cap = tile.biome.food_cap();
+        // Precompute river-adjacency so the subsequent mut borrow of tiles is clean.
+        let mut bonus = vec![false; self.tiles.len()];
+        for row in 0..self.height as i32 {
+            for col in 0..self.width as i32 {
+                if self.is_near_river(col, row) {
+                    bonus[self.idx(col, row).unwrap()] = true;
+                }
+            }
+        }
+        for (i, tile) in self.tiles.iter_mut().enumerate() {
+            let (regen_mul, cap_mul) = if bonus[i] { (1.5, 1.5) } else { (1.0, 1.0) };
+            let regen = tile.biome.food_regen() * factor * regen_mul;
+            let cap = tile.biome.food_cap() * cap_mul;
             if regen > 0.0 && tile.food < cap {
                 tile.food = (tile.food + regen).min(cap);
             }
         }
+    }
+
+    /// Count distinct rivers (connected components of river tiles).
+    pub fn river_count(&self) -> u32 {
+        let mut visited = vec![false; self.tiles.len()];
+        let mut count = 0u32;
+        for row in 0..self.height as i32 {
+            for col in 0..self.width as i32 {
+                let i = match self.idx(col, row) {
+                    Some(i) => i,
+                    None => continue,
+                };
+                if visited[i] || self.tiles[i].river == 0 {
+                    continue;
+                }
+                count += 1;
+                let mut stack = vec![(col, row)];
+                while let Some((c, r)) = stack.pop() {
+                    let idx = match self.idx(c, r) {
+                        Some(i) => i,
+                        None => continue,
+                    };
+                    if visited[idx] || self.tiles[idx].river == 0 {
+                        continue;
+                    }
+                    visited[idx] = true;
+                    for (nc, nr) in self.neighbors(c, r) {
+                        stack.push((nc, nr));
+                    }
+                }
+            }
+        }
+        count
     }
 }
 

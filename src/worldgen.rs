@@ -49,11 +49,148 @@ pub fn generate_tiles(width: u32, height: u32, seed: u64) -> Vec<Tile> {
                 temperature,
                 moisture,
                 food,
+                river: 0,
             });
         }
     }
 
+    generate_rivers(&mut tiles, width, height, seed);
     tiles
+}
+
+/// Odd-r offset hex neighbors for a standalone tile grid.
+fn hex_neighbors(col: i32, row: i32) -> [(i32, i32); 6] {
+    let odd = row & 1 == 1;
+    if odd {
+        [
+            (col, row - 1),
+            (col + 1, row - 1),
+            (col - 1, row),
+            (col + 1, row),
+            (col, row + 1),
+            (col + 1, row + 1),
+        ]
+    } else {
+        [
+            (col - 1, row - 1),
+            (col, row - 1),
+            (col - 1, row),
+            (col + 1, row),
+            (col - 1, row + 1),
+            (col, row + 1),
+        ]
+    }
+}
+
+fn tile_idx(col: i32, row: i32, width: u32, height: u32) -> Option<usize> {
+    if col < 0 || row < 0 || col as u32 >= width || row as u32 >= height {
+        return None;
+    }
+    Some(row as usize * width as usize + col as usize)
+}
+
+/// Generate rivers flowing from high ground to the coast.
+/// Uses seeded RNG to pick sources and determine flow paths.
+fn generate_rivers(tiles: &mut [Tile], width: u32, height: u32, seed: u64) {
+    use rand::SeedableRng;
+    use rand::Rng;
+    use rand_chacha::ChaCha8Rng;
+
+    let mut rng = ChaCha8Rng::seed_from_u64(seed.wrapping_add(777));
+
+    // Collect potential sources: hill and mountain tiles sorted by elevation (highest first).
+    let mut sources: Vec<(i32, i32, f32)> = Vec::new();
+    for row in 0..height as i32 {
+        for col in 0..width as i32 {
+            let i = tile_idx(col, row, width, height).unwrap();
+            let e = tiles[i].elevation;
+            if e > 0.49 {
+                sources.push((col, row, e));
+            }
+        }
+    }
+    sources.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
+
+    // Pick 5-15 river sources from the highest spots.
+    let target_rivers = rng.gen_range(5..=15).min(sources.len());
+
+    for source_idx in 0..target_rivers {
+        // Pick from the top sources with some randomness (don't always pick the absolute highest).
+        let pick = if sources.len() > target_rivers * 2 {
+            rng.gen_range(0..sources.len().min(target_rivers * 3))
+        } else {
+            source_idx % sources.len()
+        };
+        let (start_col, start_row, _) = sources[pick];
+
+        // Trace downhill to coast/ocean.
+        let mut path: Vec<(i32, i32)> = Vec::new();
+        let mut cur_col = start_col;
+        let mut cur_row = start_row;
+        let mut reached_water = false;
+        let max_steps = (width + height) as usize; // Safety limit.
+
+        for _ in 0..max_steps {
+            let cur_i = tile_idx(cur_col, cur_row, width, height).unwrap();
+            let cur_biome = tiles[cur_i].biome;
+
+            // Rivers dissolve into the sea — don't mark ocean tiles with a river.
+            if cur_biome == Biome::Ocean {
+                reached_water = true;
+                break;
+            }
+
+            path.push((cur_col, cur_row));
+
+            // Coast is the mouth — keep it in the path but stop here.
+            if cur_biome == Biome::Coast {
+                reached_water = true;
+                break;
+            }
+
+            // Find the neighbor with the lowest elevation (steepest descent).
+            let mut best_col = -1;
+            let mut best_row = -1;
+            let mut best_elev = tiles[cur_i].elevation;
+
+            for (nc, nr) in hex_neighbors(cur_col, cur_row) {
+                if let Some(ni) = tile_idx(nc, nr, width, height) {
+                    let ne = tiles[ni].elevation;
+                    if ne < best_elev {
+                        best_elev = ne;
+                        best_col = nc;
+                        best_row = nr;
+                    }
+                }
+            }
+
+            // No downhill neighbor — we're in a depression. Stop.
+            if best_col < 0 {
+                break;
+            }
+
+            cur_col = best_col;
+            cur_row = best_row;
+        }
+
+        if !reached_water || path.len() < 3 {
+            continue;
+        }
+
+        // Mark river tiles along the path.
+        for (i, &(rc, rr)) in path.iter().enumerate() {
+            let ri = tile_idx(rc, rr, width, height).unwrap();
+            // Rivers deepen as they flow downstream.
+            let river_depth = if i < path.len() / 3 {
+                1 // Headwaters
+            } else if i < path.len() * 2 / 3 {
+                2 // Midstream
+            } else {
+                3 // Lower river
+            };
+            tiles[ri].river = tiles[ri].river.max(river_depth);
+        }
+    }
 }
 
 /// Convert odd-r offset coordinates to a planar sample point. Odd rows are

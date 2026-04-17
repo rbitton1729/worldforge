@@ -46,6 +46,10 @@ struct Cli {
     #[arg(short = 'H', long = "height", default_value_t = 40)]
     height: u32,
 
+    /// Force ANSI color output on even when not detected as a terminal
+    #[arg(long = "color", default_value_t = false)]
+    color: bool,
+
     /// Disable ANSI color output (also honors NO_COLOR env var)
     #[arg(long = "no-color", default_value_t = false)]
     no_color: bool,
@@ -83,6 +87,8 @@ fn main() {
 
     if cli.no_color {
         chronicle.set_color(false);
+    } else if cli.color {
+        chronicle.set_color(true);
     }
 
     let _ = chronicle.proclaim(&format!(
@@ -103,9 +109,15 @@ fn main() {
     }
 
     let biome_summary = summarize_biomes(&world);
+    let rivers = world.river_count();
+    let river_clause = match rivers {
+        0 => String::from("No rivers cross the land"),
+        1 => String::from("A lone river winds toward the sea"),
+        n => format!("{} rivers wind toward the sea", n),
+    };
     let _ = chronicle.proclaim(&format!(
-        "The world takes shape: {}. {} souls draw their first breath.",
-        biome_summary, actual
+        "The world takes shape: {}. {}. {} souls draw their first breath.",
+        biome_summary, river_clause, actual
     ));
 
     let mut settlements = Settlements::new();

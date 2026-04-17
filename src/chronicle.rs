@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{self, BufWriter, IsTerminal, Write};
+use std::io::{self, BufWriter, Write};
 
 pub const TICKS_PER_YEAR: u64 = 100;
 pub const SEASONS: [&str; 4] = ["Spring", "Summer", "Autumn", "Winter"];
@@ -54,7 +54,7 @@ fn colors_for(line: &str) -> (&'static str, &'static str) {
     if trimmed.contains("granary") && trimmed.contains("overflows") {
         return (GREEN, RESET);
     }
-    if trimmed.contains("A band of settlers") {
+    if trimmed.contains("A band of") || trimmed.contains("settlers gathers") {
         return (GREEN, RESET);
     }
     if trimmed.contains("depart the starving halls") {
@@ -96,7 +96,7 @@ pub struct Chronicle {
 
 impl Chronicle {
     pub fn to_stdout() -> Self {
-        let color = io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+        let color = std::env::var_os("NO_COLOR").is_none();
         Self {
             writer: Box::new(BufWriter::new(io::stdout())),
             pending: Vec::new(),
