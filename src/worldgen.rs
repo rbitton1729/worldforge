@@ -99,13 +99,13 @@ fn pick_biome(elevation: f32, temperature: f32, moisture: f32) -> Biome {
     if elevation < 0.34 {
         return Biome::Coast;
     }
-    if elevation > 0.82 {
+    if elevation > 0.55 {
         return Biome::Mountains;
     }
     if temperature < 0.22 {
         return Biome::Tundra;
     }
-    if elevation > 0.65 {
+    if elevation > 0.49 {
         return Biome::Hills;
     }
     if temperature > 0.7 && moisture < 0.35 {
@@ -115,4 +115,21 @@ fn pick_biome(elevation: f32, temperature: f32, moisture: f32) -> Biome {
         return Biome::Forest;
     }
     Biome::Plains
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+    #[test]
+    fn probe_elev() {
+        let tiles = generate_tiles(80, 40, 42);
+        let mut elevs: Vec<f32> = tiles.iter().map(|t| t.elevation).collect();
+        elevs.sort_by(|a,b| a.partial_cmp(b).unwrap());
+        let n = elevs.len();
+        for p in [0.50, 0.70, 0.80, 0.85, 0.90, 0.95, 0.98, 0.99, 1.00] {
+            let i = ((n as f32 * p) as usize).min(n-1);
+            eprintln!("p{:.2} = {:.3}", p, elevs[i]);
+        }
+        eprintln!("max = {:.3}", elevs[n-1]);
+    }
 }
