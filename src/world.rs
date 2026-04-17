@@ -20,12 +20,12 @@ impl Biome {
     /// Base food regenerated per tick per tile (scaled small).
     pub fn food_regen(self) -> f32 {
         match self {
-            Biome::Plains => 0.05,
-            Biome::Forest => 0.08,
-            Biome::Coast => 0.06,
-            Biome::Hills => 0.03,
-            Biome::Tundra => 0.01,
-            Biome::Desert => 0.005,
+            Biome::Plains => 0.012,
+            Biome::Forest => 0.020,
+            Biome::Coast => 0.015,
+            Biome::Hills => 0.007,
+            Biome::Tundra => 0.002,
+            Biome::Desert => 0.001,
             Biome::Mountains => 0.0,
             Biome::Ocean => 0.0,
         }
@@ -139,14 +139,27 @@ impl World {
         self.tile(col, row).map_or(false, |t| t.biome.is_passable())
     }
 
-    pub fn regen_food(&mut self) {
+    pub fn regen_food(&mut self, tick: u64) {
+        let factor = season_regen_factor(tick);
         for tile in &mut self.tiles {
-            let regen = tile.biome.food_regen();
+            let regen = tile.biome.food_regen() * factor;
             let cap = tile.biome.food_cap();
             if regen > 0.0 && tile.food < cap {
                 tile.food = (tile.food + regen).min(cap);
             }
         }
+    }
+}
+
+/// Season multiplier for food regeneration. Spring/Summer lush, Autumn lean, Winter brutal.
+pub fn season_regen_factor(tick: u64) -> f32 {
+    let ticks_per_year = crate::chronicle::TICKS_PER_YEAR;
+    let season = (tick % ticks_per_year) / (ticks_per_year / 4);
+    match season {
+        0 => 1.3, // Spring
+        1 => 1.6, // Summer
+        2 => 0.5, // Autumn
+        _ => 0.05, // Winter
     }
 }
 

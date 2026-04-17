@@ -130,7 +130,7 @@ fn main() {
         tick += 1;
         let tick_start = Instant::now();
 
-        world.regen_food();
+        world.regen_food(tick);
         step_agents(&mut agents, &mut world, &mut rng, &mut chronicle, tick);
         update_settlements(
             &mut settlements,
