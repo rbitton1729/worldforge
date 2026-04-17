@@ -1,5 +1,5 @@
 use crate::agent::{Agent, WARRIOR_CHANCE};
-use crate::chronicle::{Chronicle, Event};
+use crate::chronicle::{Chronicle, Event, TICKS_PER_YEAR};
 use crate::world::World;
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
@@ -293,17 +293,20 @@ pub fn update_settlements(
     // Migration: if a settlement's people are starving, some depart to wander.
     migrate_from_starving(settlements, agents, world, rng, chronicle, tick);
 
-    // Granary overflow chronicling.
+    // Granary overflow chronicling — only during Autumn (season index 2).
+    let season_idx = (tick % TICKS_PER_YEAR) / (TICKS_PER_YEAR / 4);
     for s in settlements.list.iter_mut() {
         if !s.alive {
             continue;
         }
         if s.stockpile > 40.0 && !s.overflow_declared {
-            s.overflow_declared = true;
-            chronicle.record(Event::new(
-                tick,
-                format!("The granary of {} overflows with autumn harvest.", s.name),
-            ));
+            if season_idx == 2 {
+                s.overflow_declared = true;
+                chronicle.record(Event::new(
+                    tick,
+                    format!("The granary of {} overflows with autumn harvest.", s.name),
+                ));
+            }
         } else if s.stockpile < 20.0 && s.overflow_declared {
             s.overflow_declared = false;
         }
