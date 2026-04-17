@@ -1,17 +1,11 @@
-mod agent;
-mod chronicle;
-mod settlement;
-mod world;
-mod worldgen;
-
-use agent::{alive_count, seed_agents, step_agents, Agent};
-use chronicle::{Chronicle, Event};
 use clap::Parser;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use settlement::{update_settlements, Settlements};
 use std::time::{Duration, Instant};
-use world::World;
+use worldforge::agent::{alive_count, seed_agents, step_agents, Agent};
+use worldforge::chronicle::{self, Chronicle, Event};
+use worldforge::settlement::{self, update_settlements, Settlements};
+use worldforge::world::{self, World};
 
 #[derive(Parser, Debug)]
 #[command(
