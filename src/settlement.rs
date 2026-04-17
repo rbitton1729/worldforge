@@ -74,6 +74,10 @@ pub struct Settlement {
     pub trait_kind: Option<Trait>,
     pub legend_fifty: bool,
     pub legend_crash: bool,
+    /// Current land-health state around the settlement.
+    pub land_depleted: bool,
+    /// Year of the last depletion-or-recovery chronicle emission, for spam control.
+    pub last_land_event_year: Option<u64>,
 }
 
 /// Signals emitted when a trade trip is recorded.
@@ -200,6 +204,8 @@ impl Settlements {
             trait_kind: None,
             legend_fifty: false,
             legend_crash: false,
+            land_depleted: false,
+            last_land_event_year: None,
         });
         id
     }
@@ -298,6 +304,9 @@ pub fn update_settlements(
             ),
         ));
     }
+
+    // Land-health chronicling: warn on depletion, celebrate recovery.
+    update_land_health(settlements, world, chronicle, tick);
 
     // Raids between settlements.
     raid_phase(settlements, agents, world, rng, chronicle, tick);
@@ -807,6 +816,66 @@ fn raid_phase(
             .collect();
         for line in lines {
             chronicle.record(Event::new(tick, line));
+        }
+    }
+}
+
+/// Scan fertility around each settlement and record depletion/recovery events.
+fn update_land_health(
+    settlements: &mut Settlements,
+    world: &World,
+    chronicle: &mut Chronicle,
+    tick: u64,
+) {
+    const RADIUS: i32 = 3;
+    const DEPLETE_THRESHOLD: f32 = 0.3;
+    const RECOVER_THRESHOLD: f32 = 0.7;
+    let year = tick / TICKS_PER_YEAR;
+
+    for s in settlements.list.iter_mut() {
+        if !s.alive {
+            continue;
+        }
+        // Only consider biomes that can meaningfully deplete — deserts and
+        // tundra are already near-barren by nature.
+        let mut min_fert: f32 = f32::INFINITY;
+        for dr in -RADIUS..=RADIUS {
+            for dc in -RADIUS..=RADIUS {
+                let c = s.col + dc;
+                let r = s.row + dr;
+                if world.hex_distance((s.col, s.row), (c, r)) > RADIUS {
+                    continue;
+                }
+                if let Some(t) = world.tile(c, r) {
+                    if t.biome.natural_fertility() > 0.5 {
+                        min_fert = min_fert.min(t.fertility);
+                    }
+                }
+            }
+        }
+        if !min_fert.is_finite() {
+            continue;
+        }
+
+        // At most one land-health line per settlement per year.
+        if s.last_land_event_year == Some(year) {
+            continue;
+        }
+
+        if !s.land_depleted && min_fert < DEPLETE_THRESHOLD {
+            s.land_depleted = true;
+            s.last_land_event_year = Some(year);
+            chronicle.record(Event::new(
+                tick,
+                format!("The forests near {} grow thin from heavy use.", s.name),
+            ));
+        } else if s.land_depleted && min_fert > RECOVER_THRESHOLD {
+            s.land_depleted = false;
+            s.last_land_event_year = Some(year);
+            chronicle.record(Event::new(
+                tick,
+                format!("The land around {} begins to heal.", s.name),
+            ));
         }
     }
 }

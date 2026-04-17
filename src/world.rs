@@ -58,7 +58,31 @@ impl Biome {
             Biome::Tundra => "tundra",
         }
     }
+
+    /// The natural upper bound on a tile's fertility. Deserts and tundra are
+    /// already "depleted" by nature and can't recover past a low baseline.
+    pub fn natural_fertility(self) -> f32 {
+        match self {
+            Biome::Plains => 1.0,
+            Biome::Forest => 1.0,
+            Biome::Coast => 0.9,
+            Biome::Hills => 0.8,
+            Biome::Desert => 0.3,
+            Biome::Tundra => 0.3,
+            Biome::Mountains => 0.0,
+            Biome::Ocean => 0.0,
+        }
+    }
 }
+
+/// Fertility lost per full (2.0-unit) bite of foraged food. Partial bites
+/// scale proportionally, so the cost tracks how much the agent actually ate.
+pub const FERTILITY_PER_BITE: f32 = 0.02;
+/// Fertility recovered per tick, before the season multiplier is applied.
+pub const FERTILITY_RECOVERY: f32 = 0.001;
+/// Floor applied to fertility's multiplier on food cap — a fully depleted
+/// tile still holds a fraction of its base capacity.
+pub const FERTILITY_CAP_FLOOR: f32 = 0.2;
 
 #[derive(Debug, Clone)]
 pub struct Tile {
@@ -68,6 +92,9 @@ pub struct Tile {
     pub moisture: f32,
     pub food: f32,
     pub river: u8,
+    /// Land health on [0.0, 1.0]. Foraging depletes it; unused land recovers
+    /// up to the biome's natural_fertility() cap.
+    pub fertility: f32,
 }
 
 pub struct World {
@@ -190,10 +217,17 @@ impl World {
         }
         for (i, tile) in self.tiles.iter_mut().enumerate() {
             let (regen_mul, cap_mul) = if bonus[i] { (1.5, 1.5) } else { (1.0, 1.0) };
-            let regen = tile.biome.food_regen() * factor * regen_mul;
-            let cap = tile.biome.food_cap() * cap_mul;
+            let fert = tile.fertility;
+            let regen = tile.biome.food_regen() * factor * regen_mul * fert;
+            let cap = tile.biome.food_cap() * cap_mul * fert.max(FERTILITY_CAP_FLOOR);
             if regen > 0.0 && tile.food < cap {
                 tile.food = (tile.food + regen).min(cap);
+            }
+            // Fertility only heals on well-stocked tiles — heavily foraged land
+            // stays barren until agents move on and the plot regrows.
+            let natural = tile.biome.natural_fertility();
+            if fert < natural && cap > 0.0 && tile.food >= cap * 0.7 {
+                tile.fertility = (fert + FERTILITY_RECOVERY * factor).min(natural);
             }
         }
     }

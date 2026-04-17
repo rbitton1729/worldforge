@@ -40,8 +40,9 @@ pub fn generate_tiles(width: u32, height: u32, seed: u64) -> Vec<Tile> {
 
             let biome = pick_biome(elevation, temperature, moisture);
 
+            let fertility = biome.natural_fertility();
             // Tiles start half-stocked so early agents have something to forage.
-            let food = biome.food_cap() * 0.5;
+            let food = biome.food_cap() * fertility * 0.5;
 
             tiles.push(Tile {
                 biome,
@@ -50,6 +51,7 @@ pub fn generate_tiles(width: u32, height: u32, seed: u64) -> Vec<Tile> {
                 moisture,
                 food,
                 river: 0,
+                fertility,
             });
         }
     }

@@ -1,6 +1,6 @@
 use crate::chronicle::{Chronicle, Event};
 use crate::settlement::Settlements;
-use crate::world::World;
+use crate::world::{World, FERTILITY_PER_BITE};
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 
@@ -143,6 +143,8 @@ pub fn step_agents(
                 if let Some(t) = world.tile_mut(agent.col, agent.row) {
                     let bite = BITE_SIZE.min(t.food);
                     t.food -= bite;
+                    t.fertility =
+                        (t.fertility - FERTILITY_PER_BITE * (bite / BITE_SIZE)).max(0.0);
                     agent.hunger = (agent.hunger - bite * FOOD_TO_HUNGER).max(0.0);
                 }
             } else {
@@ -191,6 +193,9 @@ pub fn step_agents(
                         if gather > 0.0 {
                             if let Some(t) = world.tile_mut(agent.col, agent.row) {
                                 t.food -= gather;
+                                t.fertility = (t.fertility
+                                    - FERTILITY_PER_BITE * (gather / BITE_SIZE))
+                                    .max(0.0);
                             }
                             if let Some(s) = settlements.list.iter_mut().find(|s| s.id == sid) {
                                 s.stockpile += gather;
@@ -334,6 +339,8 @@ fn step_merchant(
             if let Some(t) = world.tile_mut(agent.col, agent.row) {
                 let bite = BITE_SIZE.min(t.food);
                 t.food -= bite;
+                t.fertility =
+                    (t.fertility - FERTILITY_PER_BITE * (bite / BITE_SIZE)).max(0.0);
                 agent.hunger = (agent.hunger - bite * FOOD_TO_HUNGER).max(0.0);
             }
         }
