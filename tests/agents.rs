@@ -56,8 +56,10 @@ fn agent_new_has_sane_defaults() {
     assert!(a.health > 0.0);
     assert_eq!(a.age, 0);
     assert!(a.settlement.is_none());
-    assert!(!a.merchant);
-    assert!(!a.warrior);
+    // Roles are derived from skills, never assigned at construction.
+    assert!(!a.is_warrior());
+    assert!(!a.is_merchant());
+    assert!(!a.is_traveling());
 }
 
 #[test]
