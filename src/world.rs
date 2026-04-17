@@ -1,3 +1,4 @@
+use crate::region::{self, Region};
 use crate::worldgen;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,16 +74,35 @@ pub struct World {
     pub width: u32,
     pub height: u32,
     pub tiles: Vec<Tile>,
+    pub regions: Vec<Region>,
+    /// Per-tile lookup into `regions`. None for tiles outside any named region.
+    region_of: Vec<Option<u16>>,
 }
 
 impl World {
     pub fn generate(width: u32, height: u32, seed: u64) -> Self {
         let tiles = worldgen::generate_tiles(width, height, seed);
+        let (regions, region_of) = region::detect_regions(&tiles, width, height, seed);
         Self {
             width,
             height,
             tiles,
+            regions,
+            region_of,
         }
+    }
+
+    /// Return the region containing (col, row), if any.
+    pub fn region_at(&self, col: i32, row: i32) -> Option<&Region> {
+        let i = self.idx(col, row)?;
+        self.region_of[i].map(|ri| &self.regions[ri as usize])
+    }
+
+    /// Names of the N largest regions by tile count, for the prologue.
+    pub fn major_region_names(&self, n: usize) -> Vec<String> {
+        let mut by_size: Vec<&Region> = self.regions.iter().collect();
+        by_size.sort_by(|a, b| b.tile_count.cmp(&a.tile_count));
+        by_size.iter().take(n).map(|r| r.name.clone()).collect()
     }
 
     #[inline]

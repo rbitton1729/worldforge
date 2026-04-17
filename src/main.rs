@@ -119,6 +119,10 @@ fn main() {
         "The world takes shape: {}. {}. {} souls draw their first breath.",
         biome_summary, river_clause, actual
     ));
+    let region_clause = describe_major_regions(&world);
+    if !region_clause.is_empty() {
+        let _ = chronicle.proclaim(&region_clause);
+    }
 
     let mut settlements = Settlements::new();
 
@@ -252,6 +256,19 @@ fn report_settlements(settlements: &Settlements, chronicle: &mut Chronicle, tick
                 format!("{} dwindles to {} inhabitants.", s.name, s.population),
             ));
         }
+    }
+}
+
+fn describe_major_regions(world: &World) -> String {
+    let names = world.major_region_names(3);
+    match names.len() {
+        0 => String::new(),
+        1 => format!("The land holds {}.", names[0]),
+        2 => format!("The land holds {} and {}.", names[0], names[1]),
+        _ => format!(
+            "The land holds {}, {}, and {}.",
+            names[0], names[1], names[2]
+        ),
     }
 }
 

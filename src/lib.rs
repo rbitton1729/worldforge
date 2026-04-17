@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod chronicle;
+pub mod region;
 pub mod settlement;
 pub mod world;
 pub mod worldgen;
@@ -64,6 +65,19 @@ pub fn run_simulation(cfg: SimConfig) -> SimOutcome {
     let mut world = World::generate(cfg.width, cfg.height, cfg.seed);
     let mut agents: Vec<Agent> = seed_agents(&world, cfg.agents, &mut rng);
     let mut settlements = Settlements::new();
+
+    let names = world.major_region_names(3);
+    if !names.is_empty() {
+        let region_clause = match names.len() {
+            1 => format!("The land holds {}.", names[0]),
+            2 => format!("The land holds {} and {}.", names[0], names[1]),
+            _ => format!(
+                "The land holds {}, {}, and {}.",
+                names[0], names[1], names[2]
+            ),
+        };
+        let _ = chronicle.proclaim(&region_clause);
+    }
 
     chronicle.record(Event::new(
         0,

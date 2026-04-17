@@ -271,16 +271,22 @@ pub fn update_settlements(
             .iter()
             .find(|s| s.id == id)
             .expect("just pushed");
-        let biome = world
-            .tile(s.col, s.row)
-            .map(|t| t.biome.name())
-            .unwrap_or("unknown land");
         let locator = match nearest {
             Some((other_name, d)) if d <= 15 => {
                 let days = describe_distance(d);
                 format!(" {} from {}", days, other_name)
             }
-            _ => format!(" upon the {}", biome),
+            _ => {
+                if let Some(region) = world.region_at(s.col, s.row) {
+                    format!(" in {}", region.name)
+                } else {
+                    let biome = world
+                        .tile(s.col, s.row)
+                        .map(|t| t.biome.name())
+                        .unwrap_or("unknown land");
+                    format!(" upon the {}", biome)
+                }
+            }
         };
         chronicle.record(Event::new(
             tick,
