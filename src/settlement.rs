@@ -5,17 +5,21 @@ use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 
 /// Trips on a declared route beyond which the two settlements pledge alliance.
-const ALLIANCE_TRIPS: u32 = 8;
+const ALLIANCE_TRIPS: u32 = 5;
 /// Maximum hex distance between settlements for a raid to be launched.
 const RAID_MAX_DISTANCE: i32 = 12;
 /// Stockpile below which a settlement becomes hungry enough to consider raiding.
-const RAID_HUNGER_STOCK: f32 = 12.0;
+const RAID_HUNGER_STOCK: f32 = 14.0;
+/// Stockpile below which a settlement is outright starving — raids much more often.
+const RAID_FAMINE_STOCK: f32 = 5.0;
 /// Target must hold at least this much to be worth raiding.
 const RAID_TARGET_STOCK: f32 = 25.0;
 /// A raider settlement must muster this many warriors to attempt a raid.
 const RAID_MIN_WARRIORS: u32 = 1;
 /// Per-tick chance of rolling for a raid when conditions are met.
-const RAID_CHANCE: f64 = 0.030;
+const RAID_CHANCE: f64 = 0.050;
+/// Multiplier applied to raid chance when a settlement is in famine.
+const RAID_FAMINE_MULT: f64 = 2.5;
 /// Raids accumulated before a blood feud is declared.
 const BLOOD_FEUD_THRESHOLD: u32 = 2;
 
@@ -428,34 +432,72 @@ fn raid_phase(
         if attackers < RAID_MIN_WARRIORS {
             continue;
         }
-        if !rng.gen_bool(RAID_CHANCE) {
+        let chance = if _rstock < RAID_FAMINE_STOCK {
+            (RAID_CHANCE * RAID_FAMINE_MULT).min(1.0)
+        } else {
+            RAID_CHANCE
+        };
+        if !rng.gen_bool(chance) {
             continue;
         }
 
-        // Pick the richest non-allied neighbor in range.
-        let raider_allied: Vec<u32> = settlements
+        // Pick target: prefer existing enemies in range, else the richest non-allied neighbor.
+        let (raider_allied, raider_enemies): (Vec<u32>, Vec<u32>) = settlements
             .list
             .iter()
             .find(|s| s.id == raider_id)
-            .map(|s| s.routes.iter().filter(|r| r.allied).map(|r| r.other_id).collect())
+            .map(|s| {
+                (
+                    s.routes.iter().filter(|r| r.allied).map(|r| r.other_id).collect(),
+                    s.enmities.iter().map(|e| e.other_id).collect(),
+                )
+            })
             .unwrap_or_default();
 
-        let target_opt = settlements
+        let enemy_target = settlements
             .list
             .iter()
             .filter(|s| {
                 s.alive
                     && s.id != raider_id
+                    && raider_enemies.contains(&s.id)
                     && !raider_allied.contains(&s.id)
-                    && s.stockpile >= RAID_TARGET_STOCK
                     && world.hex_distance((s.col, s.row), (rc, rr)) <= RAID_MAX_DISTANCE
             })
             .max_by(|a, b| a.stockpile.partial_cmp(&b.stockpile).unwrap())
             .map(|s| s.id);
 
+        let target_opt = enemy_target.or_else(|| {
+            settlements
+                .list
+                .iter()
+                .filter(|s| {
+                    s.alive
+                        && s.id != raider_id
+                        && !raider_allied.contains(&s.id)
+                        && s.stockpile >= RAID_TARGET_STOCK
+                        && world.hex_distance((s.col, s.row), (rc, rr)) <= RAID_MAX_DISTANCE
+                })
+                .max_by(|a, b| a.stockpile.partial_cmp(&b.stockpile).unwrap())
+                .map(|s| s.id)
+        });
+
         let Some(target_id) = target_opt else { continue };
 
-        let defenders = count_warriors(agents, target_id);
+        let own_defenders = count_warriors(agents, target_id);
+        // Allies of the target pledge mutual defense — their warriors join the fight.
+        let target_allies: Vec<u32> = settlements
+            .list
+            .iter()
+            .find(|s| s.id == target_id)
+            .map(|s| s.routes.iter().filter(|r| r.allied).map(|r| r.other_id).collect())
+            .unwrap_or_default();
+        let ally_defenders: u32 = target_allies
+            .iter()
+            .filter(|&&aid| settlements.list.iter().any(|s| s.id == aid && s.alive))
+            .map(|&aid| count_warriors(agents, aid))
+            .sum();
+        let defenders = own_defenders + ally_defenders;
 
         let raider_name = settlements
             .list
@@ -482,7 +524,8 @@ fn raid_phase(
         let atk_roll = attackers as f32 + rng.gen_range(0.0..3.0);
         let def_roll = defenders as f32 + 1.0 + rng.gen_range(0.0..3.0);
 
-        let sack = attackers >= 3 && atk_roll >= def_roll * 2.0;
+        // Sack: attackers vastly outnumber defenders (3x or more).
+        let sack = attackers >= 3 && attackers >= defenders.saturating_mul(3);
         let success = atk_roll > def_roll;
 
         if sack {
