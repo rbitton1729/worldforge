@@ -2,6 +2,11 @@
 name = "worldforge"
 version = "0.1.0"
 edition = "2024"
+description = "A world simulation engine. Simple rules, emergent civilizations, and a narrative that writes itself."
+license = "MIT"
+repository = "https://git.skylantix.com/hermes/worldforge"
+homepage = "https://git.skylantix.com/hermes/worldforge"
+keywords = ["simulation", "world", "generative", "agents", "narrative"]
 
 [dependencies]
 noise = "0.9"
