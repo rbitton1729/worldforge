@@ -324,14 +324,28 @@ pub fn update_settlements(
     // Land-health chronicling: warn on depletion, celebrate recovery.
     update_land_health(settlements, world, chronicle, tick);
 
+    // Build settlement -> agent-indices map once, to replace the O(s*n) per-sub-phase
+    // scans below. Within this tick's remaining work, an agent's settlement field
+    // only transitions Some(X)->None (via raid sack scatter or starvation
+    // migration), so stale entries are filtered out by re-checking state at use.
+    let members_by_settlement = build_members_map(agents);
+
     // Raids between settlements.
-    raid_phase(settlements, agents, world, rng, chronicle, tick);
+    raid_phase(settlements, agents, &members_by_settlement, world, rng, chronicle, tick);
 
     // Trade dispatch: settlements with surplus pick a skilled trader to send.
-    try_dispatch_merchants(settlements, agents, rng);
+    try_dispatch_merchants(settlements, agents, &members_by_settlement, rng);
 
     // Migration: if a settlement's people are starving, some depart to wander.
-    migrate_from_starving(settlements, agents, world, rng, chronicle, tick);
+    migrate_from_starving(
+        settlements,
+        agents,
+        &members_by_settlement,
+        world,
+        rng,
+        chronicle,
+        tick,
+    );
 
     // Granary overflow chronicling — only during Autumn (season index 2).
     let season_idx = (tick % TICKS_PER_YEAR) / (TICKS_PER_YEAR / 4);
@@ -394,22 +408,30 @@ pub fn update_settlements(
         s.population = pop;
     }
 
-    // Orphan agents whose settlement died.
-    let dead_ids: Vec<u32> = settlements
-        .list
-        .iter()
-        .filter(|s| !s.alive)
-        .map(|s| s.id)
-        .collect();
-    if !dead_ids.is_empty() {
-        for a in agents.iter_mut() {
-            if let Some(sid) = a.settlement {
-                if dead_ids.contains(&sid) {
-                    a.settlement = None;
+    // Orphan agents whose settlement died. Walk only each dead settlement's
+    // former members via the map instead of scanning every agent.
+    for s in settlements.list.iter() {
+        if s.alive {
+            continue;
+        }
+        if let Some(list) = members_by_settlement.get(&s.id) {
+            for &i in list {
+                if agents[i].settlement == Some(s.id) {
+                    agents[i].settlement = None;
                 }
             }
         }
     }
+}
+
+fn build_members_map(agents: &[Agent]) -> HashMap<u32, Vec<usize>> {
+    let mut m: HashMap<u32, Vec<usize>> = HashMap::new();
+    for (i, a) in agents.iter().enumerate() {
+        if let Some(sid) = a.settlement {
+            m.entry(sid).or_default().push(i);
+        }
+    }
+    m
 }
 
 /// Rough human-scale distance description.
@@ -427,6 +449,7 @@ fn describe_distance(hexes: i32) -> &'static str {
 fn migrate_from_starving(
     settlements: &mut Settlements,
     agents: &mut [Agent],
+    members_by_settlement: &HashMap<u32, Vec<usize>>,
     world: &World,
     rng: &mut ChaCha8Rng,
     chronicle: &mut Chronicle,
@@ -444,12 +467,18 @@ fn migrate_from_starving(
         .collect();
 
     for sid in alive_ids {
-        let members: Vec<usize> = agents
-            .iter()
-            .enumerate()
-            .filter(|(_, a)| a.alive && !a.is_traveling() && a.settlement == Some(sid))
-            .map(|(i, _)| i)
-            .collect();
+        let members: Vec<usize> = members_by_settlement
+            .get(&sid)
+            .map(|list| {
+                list.iter()
+                    .copied()
+                    .filter(|&i| {
+                        let a = &agents[i];
+                        a.alive && !a.is_traveling() && a.settlement == Some(sid)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         if members.len() < MIN_POP_TO_MIGRATE as usize {
             continue;
         }
@@ -503,6 +532,7 @@ fn migrate_from_starving(
 fn try_dispatch_merchants(
     settlements: &mut Settlements,
     agents: &mut [Agent],
+    members_by_settlement: &HashMap<u32, Vec<usize>>,
     rng: &mut ChaCha8Rng,
 ) {
     let surplus_ids: Vec<u32> = settlements
@@ -525,20 +555,23 @@ fn try_dispatch_merchants(
         // gated at MERCHANT_DISPATCH_THRESHOLD. Ties broken by lowest id for
         // determinism.
         let mut best: Option<(usize, f32)> = None;
-        for (i, a) in agents.iter().enumerate() {
-            if !a.alive
-                || a.settlement != Some(sid)
-                || a.is_traveling()
-                || (a.col, a.row) != (hc, hr)
-            {
-                continue;
-            }
-            if a.skills.trading <= MERCHANT_DISPATCH_THRESHOLD {
-                continue;
-            }
-            match best {
-                Some((_, s)) if s >= a.skills.trading => {}
-                _ => best = Some((i, a.skills.trading)),
+        if let Some(member_list) = members_by_settlement.get(&sid) {
+            for &i in member_list {
+                let a = &agents[i];
+                if !a.alive
+                    || a.settlement != Some(sid)
+                    || a.is_traveling()
+                    || (a.col, a.row) != (hc, hr)
+                {
+                    continue;
+                }
+                if a.skills.trading <= MERCHANT_DISPATCH_THRESHOLD {
+                    continue;
+                }
+                match best {
+                    Some((_, s)) if s >= a.skills.trading => {}
+                    _ => best = Some((i, a.skills.trading)),
+                }
             }
         }
         let Some((idx, _)) = best else { continue };
@@ -566,31 +599,61 @@ fn try_dispatch_merchants(
 
 /// Count living warriors (fighting skill above the recognition threshold)
 /// affiliated with settlement `sid`.
-fn count_warriors(agents: &[Agent], sid: u32) -> u32 {
-    agents
-        .iter()
-        .filter(|a| a.alive && a.is_warrior() && a.settlement == Some(sid))
+fn count_warriors(
+    agents: &[Agent],
+    members_by_settlement: &HashMap<u32, Vec<usize>>,
+    sid: u32,
+) -> u32 {
+    let Some(list) = members_by_settlement.get(&sid) else {
+        return 0;
+    };
+    list.iter()
+        .filter(|&&i| {
+            let a = &agents[i];
+            a.alive && a.is_warrior() && a.settlement == Some(sid)
+        })
         .count() as u32
 }
 
 /// Sum of fighting skill across all living warriors of settlement `sid`.
 /// Used as the muster strength for raid resolution: a roomful of seasoned
 /// warriors out-fights an equal count of journeymen.
-fn warrior_strength(agents: &[Agent], sid: u32) -> f32 {
-    agents
-        .iter()
-        .filter(|a| a.alive && a.is_warrior() && a.settlement == Some(sid))
-        .map(|a| a.skills.fighting)
+fn warrior_strength(
+    agents: &[Agent],
+    members_by_settlement: &HashMap<u32, Vec<usize>>,
+    sid: u32,
+) -> f32 {
+    let Some(list) = members_by_settlement.get(&sid) else {
+        return 0.0;
+    };
+    list.iter()
+        .filter_map(|&i| {
+            let a = &agents[i];
+            if a.alive && a.is_warrior() && a.settlement == Some(sid) {
+                Some(a.skills.fighting)
+            } else {
+                None
+            }
+        })
         .sum()
 }
 
 /// Kill up to `n` warriors belonging to settlement `sid`, returning how many fell.
-fn slay_warriors(agents: &mut [Agent], sid: u32, n: u32) -> u32 {
+fn slay_warriors(
+    agents: &mut [Agent],
+    members_by_settlement: &HashMap<u32, Vec<usize>>,
+    sid: u32,
+    n: u32,
+) -> u32 {
+    let Some(list) = members_by_settlement.get(&sid) else {
+        return 0;
+    };
     let mut killed = 0u32;
-    for a in agents.iter_mut() {
+    for &i in list {
         if killed >= n {
             break;
         }
+        let a = &mut agents[i];
         if a.alive && a.is_warrior() && a.settlement == Some(sid) {
             a.alive = false;
             killed += 1;
@@ -606,6 +669,7 @@ fn slay_warriors(agents: &mut [Agent], sid: u32, n: u32) -> u32 {
 fn resolve_raid_outcome(
     settlements: &mut Settlements,
     agents: &mut [Agent],
+    members_by_settlement: &HashMap<u32, Vec<usize>>,
     raider_id: u32,
     target_id: u32,
     raider_name: &str,
@@ -615,8 +679,8 @@ fn resolve_raid_outcome(
     chronicle: &mut Chronicle,
     tick: u64,
 ) {
-    slay_warriors(agents, raider_id, atk_losses);
-    slay_warriors(agents, target_id, def_losses);
+    slay_warriors(agents, members_by_settlement, raider_id, atk_losses);
+    slay_warriors(agents, members_by_settlement, target_id, def_losses);
 
     if atk_losses + def_losses >= 3 {
         chronicle.record(Event::new(
@@ -661,6 +725,7 @@ fn resolve_raid_outcome(
 /// non-warriors first rise above [`WARRIOR_RECOGNITION_THRESHOLD`].
 fn grant_combat_experience(
     agents: &mut [Agent],
+    members_by_settlement: &HashMap<u32, Vec<usize>>,
     sid: u32,
     warriors_only: bool,
     chronicle: &mut Chronicle,
@@ -668,7 +733,11 @@ fn grant_combat_experience(
 ) {
     use crate::agent::{FIGHTING_GROWTH, ROLE_RECOGNITION_THRESHOLD};
     let year = tick / crate::chronicle::TICKS_PER_YEAR;
-    for a in agents.iter_mut() {
+    let Some(list) = members_by_settlement.get(&sid) else {
+        return;
+    };
+    for &i in list {
+        let a = &mut agents[i];
         if !a.alive || a.settlement != Some(sid) {
             continue;
         }
@@ -694,6 +763,7 @@ fn grant_combat_experience(
 fn raid_phase(
     settlements: &mut Settlements,
     agents: &mut [Agent],
+    members_by_settlement: &HashMap<u32, Vec<usize>>,
     world: &World,
     rng: &mut ChaCha8Rng,
     chronicle: &mut Chronicle,
@@ -729,8 +799,8 @@ fn raid_phase(
             continue;
         }
         let _rstock = current_stock;
-        let attackers = count_warriors(agents, raider_id);
-        let attacker_strength = warrior_strength(agents, raider_id);
+        let attackers = count_warriors(agents, members_by_settlement, raider_id);
+        let attacker_strength = warrior_strength(agents, members_by_settlement, raider_id);
         if attackers < RAID_MIN_WARRIORS {
             continue;
         }
@@ -804,8 +874,8 @@ fn raid_phase(
 
         let Some(target_id) = target_opt else { continue };
 
-        let own_defenders = count_warriors(agents, target_id);
-        let own_defender_strength = warrior_strength(agents, target_id);
+        let own_defenders = count_warriors(agents, members_by_settlement, target_id);
+        let own_defender_strength = warrior_strength(agents, members_by_settlement, target_id);
         // Allies of the target pledge mutual defense — their warriors join the fight.
         let target_allies: Vec<u32> = settlements
             .list
@@ -816,12 +886,12 @@ fn raid_phase(
         let ally_defenders: u32 = target_allies
             .iter()
             .filter(|&&aid| settlements.list.iter().any(|s| s.id == aid && s.alive))
-            .map(|&aid| count_warriors(agents, aid))
+            .map(|&aid| count_warriors(agents, members_by_settlement, aid))
             .sum();
         let ally_defender_strength: f32 = target_allies
             .iter()
             .filter(|&&aid| settlements.list.iter().any(|s| s.id == aid && s.alive))
-            .map(|&aid| warrior_strength(agents, aid))
+            .map(|&aid| warrior_strength(agents, members_by_settlement, aid))
             .sum();
         let defenders = own_defenders + ally_defenders;
         let defender_strength = own_defender_strength + ally_defender_strength;
@@ -877,20 +947,23 @@ fn raid_phase(
                 t.alive = false;
                 (loot, t.col, t.row)
             };
-            slay_warriors(agents, target_id, defenders);
+            slay_warriors(agents, members_by_settlement, target_id, defenders);
             // Surviving civilians of target lose affiliation. Their skills
             // travel with them — wherever they end up, they remember.
-            for a in agents.iter_mut() {
-                if a.alive && a.settlement == Some(target_id) {
-                    a.settlement = None;
-                    a.cargo = 0.0;
-                    a.cargo_origin = None;
-                    a.destination = None;
+            if let Some(list) = members_by_settlement.get(&target_id) {
+                for &i in list {
+                    let a = &mut agents[i];
+                    if a.alive && a.settlement == Some(target_id) {
+                        a.settlement = None;
+                        a.cargo = 0.0;
+                        a.cargo_origin = None;
+                        a.destination = None;
+                    }
                 }
             }
             // Attacker loses a couple of warriors even in victory.
             let atk_losses = rng.gen_range(0..=2).min(attackers.saturating_sub(1));
-            slay_warriors(agents, raider_id, atk_losses);
+            slay_warriors(agents, members_by_settlement, raider_id, atk_losses);
             if let Some(r) = settlements.list.iter_mut().find(|s| s.id == raider_id) {
                 r.stockpile += loot;
             }
@@ -937,6 +1010,7 @@ fn raid_phase(
             resolve_raid_outcome(
                 settlements,
                 agents,
+                members_by_settlement,
                 raider_id,
                 target_id,
                 &raider_name,
@@ -959,6 +1033,7 @@ fn raid_phase(
             resolve_raid_outcome(
                 settlements,
                 agents,
+                members_by_settlement,
                 raider_id,
                 target_id,
                 &raider_name,
@@ -975,10 +1050,10 @@ fn raid_phase(
         // call. Defenders of the target also include non-warriors — the
         // raid was at their doorstep, so civilians learn to fight too, and
         // this is the hook that bootstraps new warriors.
-        grant_combat_experience(agents, raider_id, true, chronicle, tick);
-        grant_combat_experience(agents, target_id, false, chronicle, tick);
+        grant_combat_experience(agents, members_by_settlement, raider_id, true, chronicle, tick);
+        grant_combat_experience(agents, members_by_settlement, target_id, false, chronicle, tick);
         for &aid in &target_allies {
-            grant_combat_experience(agents, aid, true, chronicle, tick);
+            grant_combat_experience(agents, members_by_settlement, aid, true, chronicle, tick);
         }
 
         // Trait emergence after any raid outcome.
