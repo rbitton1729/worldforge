@@ -435,7 +435,7 @@ fn draw(
     if ui.show_chronicle {
         draw_chronicle(f, map_area, &ui.event_log, ui.chronicle_scroll);
     } else {
-        draw_map(f, map_area, world, settlements, tick, ui);
+        draw_map(f, map_area, world, settlements, agents, tick, ui);
     }
     draw_events(f, events_area, &ui.event_log);
     draw_stats_bar(f, stats_area, world, settlements, agents, tick, sim_over, ui);
@@ -474,6 +474,13 @@ fn draw_stats_bar(
 ) {
     let pop = alive_count(agents);
     let settle_count = settlements.alive_count();
+    let custom_count: usize = settlements
+        .list
+        .iter()
+        .filter(|s| s.alive)
+        .map(|s| s.customs.len())
+        .sum();
+    let legend_count = agents.iter().filter(|a| a.alive && a.epithet.is_some()).count();
     let year = tick / TICKS_PER_YEAR + 1;
     let season = ["Spring", "Summer", "Autumn", "Winter"][season_idx(tick)];
     let status = if sim_over {
@@ -513,6 +520,18 @@ fn draw_stats_bar(
         sep(),
         Span::styled("Settlements ", Style::default().fg(dim).bg(bg)),
         Span::styled(format!("{}", settle_count), Style::default().fg(fg).bg(bg)),
+        sep(),
+        Span::styled("Customs ", Style::default().fg(dim).bg(bg)),
+        Span::styled(
+            format!("{}", custom_count),
+            Style::default().fg(Color::Rgb(220, 180, 240)).bg(bg),
+        ),
+        sep(),
+        Span::styled("Legends ", Style::default().fg(dim).bg(bg)),
+        Span::styled(
+            format!("{}", legend_count),
+            Style::default().fg(accent).bg(bg).add_modifier(Modifier::BOLD),
+        ),
         sep(),
         Span::styled("Speed ", Style::default().fg(dim).bg(bg)),
         Span::styled(
@@ -690,6 +709,7 @@ fn draw_map(
     area: Rect,
     world: &World,
     settlements: &Settlements,
+    agents: &[Agent],
     tick: u64,
     ui: &TuiState,
 ) {
@@ -706,17 +726,41 @@ fn draw_map(
         return;
     }
 
+    // Per-settlement count of living agents that have earned an epithet.
+    // Used by zoom-in/zoom-normal to mark culturally notable settlements.
+    let mut legend_counts: HashMap<u32, u32> = HashMap::new();
+    for a in agents {
+        if !a.alive || a.epithet.is_none() {
+            continue;
+        }
+        if let Some(sid) = a.settlement {
+            *legend_counts.entry(sid).or_insert(0) += 1;
+        }
+    }
+
     match ui.zoom {
-        Zoom::Normal => draw_map_halfblock(f, inner, world, settlements, tick, ui, 1, false),
+        Zoom::Normal => {
+            draw_map_halfblock(f, inner, world, settlements, &legend_counts, tick, ui, 1, false)
+        }
         Zoom::Out => {
             let cols = inner.width as u32;
             let halfrows = inner.height as u32 * 2;
             let sx = world.width.div_ceil(cols.max(1));
             let sy = world.height.div_ceil(halfrows.max(1));
             let scale = sx.max(sy).max(1);
-            draw_map_halfblock(f, inner, world, settlements, tick, ui, scale, true);
+            draw_map_halfblock(
+                f,
+                inner,
+                world,
+                settlements,
+                &legend_counts,
+                tick,
+                ui,
+                scale,
+                true,
+            );
         }
-        Zoom::In => draw_map_zoomed_in(f, inner, world, settlements, tick, ui),
+        Zoom::In => draw_map_zoomed_in(f, inner, world, settlements, &legend_counts, tick, ui),
     }
 }
 
@@ -754,6 +798,7 @@ fn draw_map_halfblock(
     inner: Rect,
     world: &World,
     settlements: &Settlements,
+    legend_counts: &HashMap<u32, u32>,
     tick: u64,
     ui: &TuiState,
     scale: u32,
@@ -804,6 +849,7 @@ fn draw_map_halfblock(
                 bg: tile_bg,
                 bold: false,
                 dim: true,
+                underlined: false,
                 priority: 0,
             });
             continue;
@@ -813,12 +859,16 @@ fn draw_map_halfblock(
             .get(&st.id)
             .map_or(false, |until| *until >= tick);
         let bg = if flashing { C_FLASH_BG } else { tile_bg };
+        // Culturally notable = has customs or harbors a living legend agent.
+        // Underlined marker is the subtlest signal that fits in a half-block cell.
+        let notable = !st.customs.is_empty() || legend_counts.get(&st.id).copied().unwrap_or(0) > 0;
         let marker = Marker {
             ch: settlement_marker_char(st),
             fg: settlement_fg(st),
             bg,
             bold: true,
             dim: false,
+            underlined: notable,
             priority: st.population.saturating_add(1),
         };
         // Larger settlement wins cell collision.
@@ -847,6 +897,9 @@ fn draw_map_halfblock(
                 }
                 if m.dim {
                     style = style.add_modifier(Modifier::DIM);
+                }
+                if m.underlined {
+                    style = style.add_modifier(Modifier::UNDERLINED);
                 }
                 spans.push(Span::styled(String::from(m.ch), style));
                 continue;
@@ -879,6 +932,9 @@ struct Marker {
     bg: Color,
     bold: bool,
     dim: bool,
+    /// Settlement has customs and/or living legend agents — rendered as
+    /// underline on the marker glyph so the eye can spot notable places.
+    underlined: bool,
     /// Used to resolve collisions when several settlements fall in one cell
     /// at high zoom-out. Higher = wins. Live settlements use population + 1;
     /// ruins use 0 so any living settlement overrides a ruin.
@@ -988,6 +1044,7 @@ fn draw_map_zoomed_in(
     inner: Rect,
     world: &World,
     settlements: &Settlements,
+    legend_counts: &HashMap<u32, u32>,
     tick: u64,
     ui: &TuiState,
 ) {
