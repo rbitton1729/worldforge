@@ -17,7 +17,7 @@ Settlements form, trade, raid each other, develop traits. The chronicle narrates
   (epithets like "the Conqueror", "the Wanderer" based on deeds: raiding, trading, surviving)
 - [x] Customs emerge — settlements develop traditions from behavior patterns
   ("The people of Thornhold feast at harvest", "Velmara sends its youth on a year's journey")
-- [ ] Languages — settlements that are far apart develop different name generators
+- [x] Languages — settlements that are far apart develop different name generators
 - [ ] Religion — emerges from attempts to explain famine/abundance
   ("The people of Calwold begin to worship the river")
 
