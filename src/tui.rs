@@ -34,6 +34,31 @@ const SPEEDS: &[u32] = &[1, 5, 10, 30, 60, 0];
 const DEFAULT_SPEED_IDX: usize = 2; // 10 tps
 const EVENT_LOG_CAP: usize = 500;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Zoom {
+    Out,    // fit full world (scale ≥ 1)
+    Normal, // 1 term col per tile, half-block vertical
+    In,     // 2×2 term cells per tile
+}
+
+impl Zoom {
+    fn next(self) -> Self {
+        match self {
+            Zoom::Out => Zoom::Normal,
+            Zoom::Normal => Zoom::In,
+            Zoom::In => Zoom::Out,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Zoom::Out => "out",
+            Zoom::Normal => "1:1",
+            Zoom::In => "in",
+        }
+    }
+}
+
 pub fn run(cfg: SimConfig, chronicle: &mut Chronicle) -> io::Result<SimOutcome> {
     let mut term = setup_terminal()?;
     let result = run_inner(&mut term, cfg, chronicle);
@@ -66,6 +91,7 @@ struct TuiState {
     speed_idx: usize,
     paused: bool,
     show_chronicle: bool,
+    zoom: Zoom,
     cam_col: i32,
     cam_row: i32,
     chronicle_scroll: u16,
@@ -93,6 +119,7 @@ fn run_inner(
         speed_idx: DEFAULT_SPEED_IDX,
         paused: false,
         show_chronicle: false,
+        zoom: Zoom::Normal,
         cam_col: cfg.width as i32 / 2,
         cam_row: cfg.height as i32 / 2,
         chronicle_scroll: 0,
@@ -108,7 +135,7 @@ fn run_inner(
         // --- input (non-blocking poll)
         if event::poll(Duration::from_millis(0))? {
             if let event::Event::Key(key) = event::read()? {
-                if handle_key(key, &mut ui) {
+                if handle_key(key, &mut ui, &settlements, &world) {
                     break;
                 }
             }
@@ -208,10 +235,17 @@ fn run_inner(
 }
 
 /// Handle one key event. Returns true if the user asked to quit.
-fn handle_key(key: KeyEvent, ui: &mut TuiState) -> bool {
+fn handle_key(key: KeyEvent, ui: &mut TuiState, settlements: &Settlements, world: &World) -> bool {
     if key.kind == KeyEventKind::Release {
         return false;
     }
+    // Pan step: bigger when zoomed out (each char covers more tiles),
+    // smaller when zoomed in.
+    let pan = match ui.zoom {
+        Zoom::Out => 4,
+        Zoom::Normal => 2,
+        Zoom::In => 1,
+    };
     match key.code {
         KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => return true,
         KeyCode::Char(' ') => ui.paused = !ui.paused,
@@ -225,20 +259,34 @@ fn handle_key(key: KeyEvent, ui: &mut TuiState) -> bool {
             ui.show_chronicle = !ui.show_chronicle;
             ui.chronicle_scroll = 0;
         }
-        KeyCode::Left => ui.cam_col -= 2,
-        KeyCode::Right => ui.cam_col += 2,
+        KeyCode::Char('z') | KeyCode::Char('Z') => {
+            ui.zoom = ui.zoom.next();
+            // Entering zoomed-in: recenter on the most-populated settlement
+            // so the user has something interesting in view by default.
+            if ui.zoom == Zoom::In {
+                if let Some((c, r)) = most_populated(settlements) {
+                    ui.cam_col = c;
+                    ui.cam_row = r;
+                } else {
+                    ui.cam_col = world.width as i32 / 2;
+                    ui.cam_row = world.height as i32 / 2;
+                }
+            }
+        }
+        KeyCode::Left => ui.cam_col -= pan,
+        KeyCode::Right => ui.cam_col += pan,
         KeyCode::Up => {
             if ui.show_chronicle {
                 ui.chronicle_scroll = ui.chronicle_scroll.saturating_sub(1);
             } else {
-                ui.cam_row -= 2;
+                ui.cam_row -= pan;
             }
         }
         KeyCode::Down => {
             if ui.show_chronicle {
                 ui.chronicle_scroll = ui.chronicle_scroll.saturating_add(1);
             } else {
-                ui.cam_row += 2;
+                ui.cam_row += pan;
             }
         }
         KeyCode::PageUp => {
@@ -256,6 +304,15 @@ fn handle_key(key: KeyEvent, ui: &mut TuiState) -> bool {
     false
 }
 
+fn most_populated(settlements: &Settlements) -> Option<(i32, i32)> {
+    settlements
+        .list
+        .iter()
+        .filter(|s| s.alive)
+        .max_by_key(|s| s.population)
+        .map(|s| (s.col, s.row))
+}
+
 // ---------- drawing ----------
 
 fn draw(
@@ -268,28 +325,32 @@ fn draw(
     ui: &TuiState,
 ) {
     let outer = f.area();
-    let vert = Layout::default()
+
+    // Reserve 2 lines for the stats bar at the bottom and ~22% of remaining
+    // height for the events panel. The map gets whatever's left.
+    let stats_h: u16 = 2;
+    let remaining = outer.height.saturating_sub(stats_h);
+    let events_h: u16 = (remaining as u32 * 22 / 100).clamp(5, 15) as u16;
+
+    let v = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(1)])
+        .constraints([
+            Constraint::Min(5),
+            Constraint::Length(events_h),
+            Constraint::Length(stats_h),
+        ])
         .split(outer);
-    let main = vert[0];
-    let help_bar = vert[1];
+    let map_area = v[0];
+    let events_area = v[1];
+    let stats_area = v[2];
 
-    let side_w = 36u16.min(outer.width / 3);
-    let body = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(20), Constraint::Length(side_w)])
-        .split(main);
-    let map_area = body[0];
-    let side = body[1];
-
-    draw_help(f, help_bar, tick, sim_over, ui);
-    draw_side(f, side, world, settlements, agents, tick, ui);
     if ui.show_chronicle {
         draw_chronicle(f, map_area, &ui.event_log, ui.chronicle_scroll);
     } else {
-        draw_map(f, map_area, world, settlements, (ui.cam_col, ui.cam_row));
+        draw_map(f, map_area, world, settlements, ui);
     }
+    draw_events(f, events_area, &ui.event_log);
+    draw_stats_bar(f, stats_area, world, settlements, agents, tick, sim_over, ui);
 }
 
 fn speed_label(idx: usize) -> String {
@@ -299,7 +360,21 @@ fn speed_label(idx: usize) -> String {
     }
 }
 
-fn draw_help(f: &mut Frame, area: Rect, tick: u64, sim_over: bool, ui: &TuiState) {
+fn draw_stats_bar(
+    f: &mut Frame,
+    area: Rect,
+    world: &World,
+    settlements: &Settlements,
+    agents: &[Agent],
+    tick: u64,
+    sim_over: bool,
+    ui: &TuiState,
+) {
+    let pop = alive_count(agents);
+    let settle_count = settlements.alive_count();
+    let year = tick / TICKS_PER_YEAR + 1;
+    let season = ["Spring", "Summer", "Autumn", "Winter"]
+        [((tick % TICKS_PER_YEAR) / (TICKS_PER_YEAR / 4)) as usize];
     let status = if sim_over {
         "ended"
     } else if ui.paused {
@@ -307,103 +382,93 @@ fn draw_help(f: &mut Frame, area: Rect, tick: u64, sim_over: bool, ui: &TuiState
     } else {
         "running"
     };
-    let view = if ui.show_chronicle { "map" } else { "log" };
-    let text = format!(
-        " [q]quit  [space]pause  [+/-]speed={}  [r]view→{}  [←↑↓→]pan    │ tick {}  year {}  {} ",
-        speed_label(ui.speed_idx),
-        view,
-        tick,
-        tick / TICKS_PER_YEAR + 1,
-        status,
-    );
-    f.render_widget(
-        Paragraph::new(text).style(
-            Style::default()
-                .bg(Color::Rgb(40, 40, 50))
-                .fg(Color::Rgb(220, 220, 220)),
+
+    let bg = Color::Rgb(40, 40, 50);
+    let fg = Color::Rgb(220, 220, 220);
+    let dim = Color::Rgb(140, 140, 150);
+    let accent = Color::Rgb(255, 220, 130);
+
+    let sep = Span::styled(" │ ", Style::default().fg(dim).bg(bg));
+    let stats_line = Line::from(vec![
+        Span::styled(" Year ", Style::default().fg(dim).bg(bg)),
+        Span::styled(
+            format!("{} ({})", year, season),
+            Style::default().fg(accent).bg(bg).add_modifier(Modifier::BOLD),
         ),
+        sep.clone(),
+        Span::styled("Pop ", Style::default().fg(dim).bg(bg)),
+        Span::styled(format!("{}", pop), Style::default().fg(Color::LightGreen).bg(bg)),
+        sep.clone(),
+        Span::styled("Settlements ", Style::default().fg(dim).bg(bg)),
+        Span::styled(format!("{}", settle_count), Style::default().fg(fg).bg(bg)),
+        sep.clone(),
+        Span::styled("Speed ", Style::default().fg(dim).bg(bg)),
+        Span::styled(format!("{} tps", speed_label(ui.speed_idx)), Style::default().fg(fg).bg(bg)),
+        sep.clone(),
+        Span::styled("Zoom ", Style::default().fg(dim).bg(bg)),
+        Span::styled(ui.zoom.label(), Style::default().fg(fg).bg(bg)),
+        sep.clone(),
+        Span::styled("Climate ", Style::default().fg(dim).bg(bg)),
+        Span::styled(format!("{:+.2}", world.climate_drift), Style::default().fg(fg).bg(bg)),
+        sep.clone(),
+        Span::styled(status, Style::default().fg(accent).bg(bg)),
+    ]);
+
+    let keys_line = Line::from(vec![
+        Span::styled(
+            " [q]quit  [space]pause  [+/-]speed  [z]zoom  [r]chronicle  [←↑↓→]pan ",
+            Style::default().fg(fg).bg(bg),
+        ),
+    ]);
+
+    f.render_widget(
+        Paragraph::new(vec![stats_line, keys_line]).style(Style::default().bg(bg)),
         area,
     );
 }
 
-fn draw_side(
-    f: &mut Frame,
-    area: Rect,
-    world: &World,
-    settlements: &Settlements,
-    agents: &[Agent],
-    tick: u64,
-    ui: &TuiState,
-) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(9), Constraint::Min(3)])
-        .split(area);
+fn draw_events(f: &mut Frame, area: Rect, log: &VecDeque<(u64, String)>) {
+    let block = Block::default().borders(Borders::ALL).title(" Events ");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
 
-    let pop = alive_count(agents);
-    let settle_count = settlements.alive_count();
-    let year = tick / TICKS_PER_YEAR + 1;
-    let season = ["Spring", "Summer", "Autumn", "Winter"]
-        [((tick % TICKS_PER_YEAR) / (TICKS_PER_YEAR / 4)) as usize];
+    let visible_rows = inner.height as usize;
+    let inner_w = inner.width as usize;
+    if visible_rows == 0 || inner_w == 0 {
+        return;
+    }
 
-    let stats_lines: Vec<Line> = vec![
-        Line::from(vec![
-            Span::styled("Year       ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{}  ({})", year, season), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-        ]),
-        Line::from(vec![
-            Span::styled("Tick       ", Style::default().fg(Color::DarkGray)),
-            Span::raw(format!("{}", tick)),
-        ]),
-        Line::from(vec![
-            Span::styled("Population ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{}", pop), Style::default().fg(Color::Green)),
-        ]),
-        Line::from(vec![
-            Span::styled("Settlements", Style::default().fg(Color::DarkGray)),
-            Span::raw(format!(" {}", settle_count)),
-        ]),
-        Line::from(vec![
-            Span::styled("Climate    ", Style::default().fg(Color::DarkGray)),
-            Span::raw(format!("{:+.3}", world.climate_drift)),
-        ]),
-        Line::from(vec![
-            Span::styled("Speed      ", Style::default().fg(Color::DarkGray)),
-            Span::raw(format!("{} tps", speed_label(ui.speed_idx))),
-        ]),
-    ];
-    f.render_widget(
-        Paragraph::new(stats_lines)
-            .block(Block::default().borders(Borders::ALL).title(" World ")),
-        chunks[0],
-    );
-
-    // Recent events: most-recent N fitting the panel.
-    let inner_h = chunks[1].height.saturating_sub(2) as usize;
-    let visible: Vec<Line> = ui
-        .event_log
+    let lines: Vec<Line> = log
         .iter()
         .rev()
-        .take(inner_h.max(1) * 2) // over-provide; Wrap{trim} will drop excess
+        .take(visible_rows)
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
-        .map(|(t, text)| {
-            Line::from(vec![
-                Span::styled(
-                    format!("t{:>5} ", t),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::raw(text.clone()),
-            ])
-        })
+        .map(|(t, text)| format_event_line(*t, text, inner_w))
         .collect();
-    f.render_widget(
-        Paragraph::new(visible)
-            .block(Block::default().borders(Borders::ALL).title(" Events "))
-            .wrap(Wrap { trim: true }),
-        chunks[1],
-    );
+
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+fn format_event_line(tick: u64, text: &str, max_width: usize) -> Line<'static> {
+    let year = tick / TICKS_PER_YEAR + 1;
+    let season = ["Sp", "Su", "Au", "Wi"]
+        [((tick % TICKS_PER_YEAR) / (TICKS_PER_YEAR / 4)) as usize];
+    let prefix = format!("Y{:<4} {} ", year, season);
+    let prefix_len = prefix.chars().count();
+    let budget = max_width.saturating_sub(prefix_len);
+    let body: String = if text.chars().count() > budget {
+        let mut s: String = text.chars().take(budget.saturating_sub(1)).collect();
+        s.push('…');
+        s
+    } else {
+        text.to_string()
+    };
+    Line::from(vec![
+        Span::styled(prefix, Style::default().fg(Color::DarkGray)),
+        Span::raw(body),
+    ])
 }
 
 fn biome_color(b: Biome) -> Color {
@@ -427,10 +492,15 @@ fn river_color(b: Biome) -> Color {
     }
 }
 
-struct CellStyle {
-    ch: char,
-    fg: Color,
-    bold: bool,
+fn tile_color(world: &World, col: i32, row: i32) -> Color {
+    let Some(tile) = world.tile(col, row) else {
+        return Color::Black;
+    };
+    if tile.river > 0 {
+        river_color(tile.biome)
+    } else {
+        biome_color(tile.biome)
+    }
 }
 
 fn draw_map(
@@ -438,42 +508,112 @@ fn draw_map(
     area: Rect,
     world: &World,
     settlements: &Settlements,
-    cam: (i32, i32),
+    ui: &TuiState,
 ) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!(" World  {}×{} ", world.width, world.height));
+    let title = match ui.zoom {
+        Zoom::Out => format!(" World  {}×{}  (zoomed out) ", world.width, world.height),
+        Zoom::Normal => format!(" World  {}×{} ", world.width, world.height),
+        Zoom::In => format!(" World  {}×{}  (zoomed in) ", world.width, world.height),
+    };
+    let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Half-block trick: one terminal row = two map rows stacked. Settlements
-    // override the half-block with a bold marker character.
-    let cols = inner.width as i32;
-    let rows = inner.height as i32;
-
-    let (cc, cr) = cam;
-    let left = cc - cols / 2;
-    let top = cr - rows;
-
-    let mut settlement_at: HashMap<(i32, i32), (char, u32)> = HashMap::new();
-    for s in &settlements.list {
-        if !s.alive {
-            continue;
-        }
-        let ch = s.name.chars().next().unwrap_or('#').to_ascii_uppercase();
-        settlement_at.insert((s.col, s.row), (ch, s.population));
+    if inner.width == 0 || inner.height == 0 {
+        return;
     }
 
+    match ui.zoom {
+        Zoom::Normal => draw_map_halfblock(f, inner, world, settlements, ui, 1, false),
+        Zoom::Out => {
+            let cols = inner.width as u32;
+            let halfrows = inner.height as u32 * 2;
+            let sx = world.width.div_ceil(cols.max(1));
+            let sy = world.height.div_ceil(halfrows.max(1));
+            let scale = sx.max(sy).max(1);
+            draw_map_halfblock(f, inner, world, settlements, ui, scale, true);
+        }
+        Zoom::In => draw_map_zoomed_in(f, inner, world, settlements, ui),
+    }
+}
+
+/// Half-block renderer. Each terminal char represents `scale` map cols wide
+/// and `2*scale` map rows tall (top half + bottom half, each covering `scale`
+/// map rows). `fit_world=true` centers the world within the viewport; otherwise
+/// the viewport is centered on the camera.
+fn draw_map_halfblock(
+    f: &mut Frame,
+    inner: Rect,
+    world: &World,
+    settlements: &Settlements,
+    ui: &TuiState,
+    scale: u32,
+    fit_world: bool,
+) {
+    let cols = inner.width as i32;
+    let rows = inner.height as i32;
+    let s = scale as i32;
+
+    let (start_col, start_row) = if fit_world {
+        let cov_cols = cols * s;
+        let cov_rows = rows * 2 * s;
+        (
+            (world.width as i32 - cov_cols) / 2,
+            (world.height as i32 - cov_rows) / 2,
+        )
+    } else {
+        let visible_cols = cols * s;
+        let visible_rows = rows * 2 * s;
+        (ui.cam_col - visible_cols / 2, ui.cam_row - visible_rows / 2)
+    };
+
+    // Place settlement markers into terminal-cell slots (top or bottom half).
+    // Pick the most-populated settlement if multiple fall into one half-cell.
+    let mut marker_top: HashMap<(i32, i32), (char, u32)> = HashMap::new();
+    let mut marker_bot: HashMap<(i32, i32), (char, u32)> = HashMap::new();
+    for st in &settlements.list {
+        if !st.alive {
+            continue;
+        }
+        let dc = st.col - start_col;
+        let dr = st.row - start_row;
+        if dc < 0 || dr < 0 {
+            continue;
+        }
+        let tc = dc / s;
+        let strip = dr / s; // even=top, odd=bottom
+        let tr = strip / 2;
+        if tc >= cols || tr >= rows {
+            continue;
+        }
+        let ch = st.name.chars().next().unwrap_or('#').to_ascii_uppercase();
+        let slot = if strip % 2 == 0 {
+            &mut marker_top
+        } else {
+            &mut marker_bot
+        };
+        slot.entry((tc, tr))
+            .and_modify(|e| {
+                if st.population > e.1 {
+                    *e = (ch, st.population);
+                }
+            })
+            .or_insert((ch, st.population));
+    }
+
+    let half_offset = s / 2;
     let mut lines: Vec<Line> = Vec::with_capacity(rows as usize);
     for term_row in 0..rows {
-        let map_top = top + term_row * 2;
-        let map_bot = map_top + 1;
+        let top_map_row = start_row + term_row * 2 * s + half_offset;
+        let bot_map_row = top_map_row + s;
         let mut spans: Vec<Span> = Vec::with_capacity(cols as usize);
         for term_col in 0..cols {
-            let c = left + term_col;
-            let top_cell = tile_style(world, &settlement_at, c, map_top);
-            let bot_cell = tile_style(world, &settlement_at, c, map_bot);
-            spans.push(combine_half_block(&top_cell, &bot_cell));
+            let map_col = start_col + term_col * s + half_offset;
+            let top_color = tile_color(world, map_col, top_map_row);
+            let bot_color = tile_color(world, map_col, bot_map_row);
+            let top_ch = marker_top.get(&(term_col, term_row)).map(|e| e.0);
+            let bot_ch = marker_bot.get(&(term_col, term_row)).map(|e| e.0);
+            spans.push(combine_half_block(top_color, top_ch, bot_color, bot_ch));
         }
         lines.push(Line::from(spans));
     }
@@ -481,63 +621,98 @@ fn draw_map(
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-fn tile_style(
+/// Zoomed-in renderer: each world tile occupies a 2×2 block of terminal cells.
+/// Settlement marker is drawn in the top-left of its tile block.
+fn draw_map_zoomed_in(
+    f: &mut Frame,
+    inner: Rect,
     world: &World,
-    settlement_at: &HashMap<(i32, i32), (char, u32)>,
-    col: i32,
-    row: i32,
-) -> CellStyle {
-    let Some(tile) = world.tile(col, row) else {
-        return CellStyle {
-            ch: ' ',
-            fg: Color::Black,
-            bold: false,
-        };
-    };
-    let mut color = biome_color(tile.biome);
-    if tile.river > 0 {
-        color = river_color(tile.biome);
+    settlements: &Settlements,
+    ui: &TuiState,
+) {
+    let tile_w: i32 = 2;
+    let tile_h: i32 = 2;
+    let tiles_cols = (inner.width as i32) / tile_w;
+    let tiles_rows = (inner.height as i32) / tile_h;
+    if tiles_cols <= 0 || tiles_rows <= 0 {
+        return;
     }
-    if let Some(&(ch, _pop)) = settlement_at.get(&(col, row)) {
-        CellStyle {
-            ch,
-            fg: Color::Rgb(255, 240, 160),
-            bold: true,
+
+    let left = ui.cam_col - tiles_cols / 2;
+    let top = ui.cam_row - tiles_rows / 2;
+
+    let mut settlement_at: HashMap<(i32, i32), char> = HashMap::new();
+    for st in &settlements.list {
+        if !st.alive {
+            continue;
         }
-    } else {
-        CellStyle {
-            ch: ' ',
-            fg: color,
-            bold: false,
-        }
+        let ch = st.name.chars().next().unwrap_or('#').to_ascii_uppercase();
+        settlement_at.insert((st.col, st.row), ch);
     }
+
+    let total_rows = (tiles_rows * tile_h) as usize;
+    let total_cols = (tiles_cols * tile_w) as usize;
+    let mut lines: Vec<Line> = Vec::with_capacity(total_rows);
+    for term_row in 0..(tiles_rows * tile_h) {
+        let tile_row = top + term_row / tile_h;
+        let sub_row = term_row % tile_h;
+        let mut spans: Vec<Span> = Vec::with_capacity(total_cols);
+        for tile_col_off in 0..tiles_cols {
+            let tile_col = left + tile_col_off;
+            let color = tile_color(world, tile_col, tile_row);
+            let marker = settlement_at.get(&(tile_col, tile_row)).copied();
+            for sub_col in 0..tile_w {
+                let is_marker_cell = marker.is_some() && sub_row == 0 && sub_col == 0;
+                if is_marker_cell {
+                    let ch = marker.unwrap();
+                    spans.push(Span::styled(
+                        String::from(ch),
+                        Style::default()
+                            .fg(Color::Rgb(255, 240, 160))
+                            .bg(color)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                } else {
+                    spans.push(Span::styled(" ".to_string(), Style::default().bg(color)));
+                }
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
-/// Combine a top and bottom map row into one terminal cell. The upper half
-/// takes the `top` biome color, the lower half the `bot` color. When either
-/// cell is a settlement marker, render its character; priority: top, then bot.
-fn combine_half_block(top: &CellStyle, bot: &CellStyle) -> Span<'static> {
-    if top.ch != ' ' {
-        // Settlement on the top map row — render its character using the
-        // settlement's fg, with the bottom row's biome as the bg so the cell
-        // stays embedded in the landscape.
-        let style = Style::default()
-            .fg(top.fg)
-            .bg(bot.fg)
-            .add_modifier(if top.bold { Modifier::BOLD } else { Modifier::empty() });
-        return Span::styled(String::from(top.ch), style);
+/// Combine a top and bottom map sample into one terminal cell using the
+/// upper-half-block character. When a settlement marker is present in either
+/// half, render the marker char instead, with the other half's biome as bg.
+fn combine_half_block(
+    top_color: Color,
+    top_ch: Option<char>,
+    bot_color: Color,
+    bot_ch: Option<char>,
+) -> Span<'static> {
+    if let Some(ch) = top_ch {
+        return Span::styled(
+            String::from(ch),
+            Style::default()
+                .fg(Color::Rgb(255, 240, 160))
+                .bg(bot_color)
+                .add_modifier(Modifier::BOLD),
+        );
     }
-    if bot.ch != ' ' {
-        let style = Style::default()
-            .fg(bot.fg)
-            .bg(top.fg)
-            .add_modifier(if bot.bold { Modifier::BOLD } else { Modifier::empty() });
-        return Span::styled(String::from(bot.ch), style);
+    if let Some(ch) = bot_ch {
+        return Span::styled(
+            String::from(ch),
+            Style::default()
+                .fg(Color::Rgb(255, 240, 160))
+                .bg(top_color)
+                .add_modifier(Modifier::BOLD),
+        );
     }
-    // Pure terrain: upper-half block paints top as fg, bottom as bg.
     Span::styled(
         "▀".to_string(),
-        Style::default().fg(top.fg).bg(bot.fg),
+        Style::default().fg(top_color).bg(bot_color),
     )
 }
 
@@ -546,9 +721,12 @@ fn draw_chronicle(f: &mut Frame, area: Rect, log: &VecDeque<(u64, String)>, scro
     let lines: Vec<Line> = log
         .iter()
         .map(|(t, text)| {
+            let year = t / TICKS_PER_YEAR + 1;
+            let season = ["Sp", "Su", "Au", "Wi"]
+                [((t % TICKS_PER_YEAR) / (TICKS_PER_YEAR / 4)) as usize];
             Line::from(vec![
                 Span::styled(
-                    format!("t{:>6} ", t),
+                    format!("Y{:<5} {} ", year, season),
                     Style::default().fg(Color::DarkGray),
                 ),
                 Span::raw(text.clone()),
