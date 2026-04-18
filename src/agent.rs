@@ -32,6 +32,12 @@ pub const TRADING_GROWTH: f32 = 0.02;
 /// Skill at or above which an agent is recognized as a seasoned warrior or
 /// trusted merchant — the milestone emitted in the chronicle.
 pub const ROLE_RECOGNITION_THRESHOLD: f32 = 0.5;
+/// Foraging skill at which an agent earns the "grows masterful" chronicle line.
+/// Set above ROLE_RECOGNITION_THRESHOLD so the milestone signals sustained
+/// mastery rather than a one-time crossing — foraging is a universal activity
+/// and agents routinely drift across the 0.5 line, so the cheaper threshold
+/// would drown out actual narrative in a high-churn population.
+pub const FORAGING_MASTER_THRESHOLD: f32 = 0.9;
 /// Fighting skill above which an agent is treated as a warrior by settlement
 /// bookkeeping (mustered for raids, patrols near home). Set below the founder
 /// skill-bias ceiling so a fraction of the seeded population are warriors from
@@ -114,6 +120,10 @@ pub struct Agent {
     /// Year of the last skill-milestone chronicle line for this agent —
     /// throttles "X has become a seasoned warrior" lines to once a year.
     pub last_skill_event_year: Option<u64>,
+    /// True once the "grows masterful at finding food" line has fired. Foraging
+    /// skill oscillates near the threshold tick-to-tick (decay vs practice), so
+    /// per-year throttling isn't enough — this makes it once per agent.
+    pub milestone_foraging: bool,
     pub cargo: f32,
     pub cargo_origin: Option<u32>,
     pub destination: Option<u32>,
@@ -134,6 +144,7 @@ impl Agent {
             settlement: None,
             skills: Skill::baseline(),
             last_skill_event_year: None,
+            milestone_foraging: false,
             cargo: 0.0,
             cargo_origin: None,
             destination: None,
@@ -251,9 +262,17 @@ pub fn step_agents(
                         (t.fertility - FERTILITY_PER_BITE * (bite / BITE_SIZE)).max(0.0);
                     agent.hunger = (agent.hunger - bite * FOOD_TO_HUNGER).max(0.0);
                 }
-                if grow_skill(&mut agent.skills.foraging, FORAGING_GROWTH) {
-                    let line = format!("{} grows masterful at finding food.", agent.name);
-                    record_skill_milestone(agent, chronicle, tick, line);
+                let _ = grow_skill(&mut agent.skills.foraging, FORAGING_GROWTH);
+                if !agent.milestone_foraging
+                    && agent.skills.foraging >= FORAGING_MASTER_THRESHOLD
+                    && chronicle.try_foraging_milestone_year(tick)
+                {
+                    agent.milestone_foraging = true;
+                    agent.last_skill_event_year = Some(tick / TICKS_PER_YEAR);
+                    chronicle.record(Event::new(
+                        tick,
+                        format!("{} grows masterful at finding food.", agent.name),
+                    ));
                 }
             } else {
                 // Warriors patrol near their settlement instead of ranging for food.
@@ -315,12 +334,20 @@ pub fn step_agents(
                             if let Some(s) = settlements.list.iter_mut().find(|s| s.id == sid) {
                                 s.stockpile += gather;
                             }
-                            if grow_skill(&mut agent.skills.foraging, FORAGING_GROWTH) {
-                                let line = format!(
-                                    "{} grows masterful at finding food.",
-                                    agent.name
-                                );
-                                record_skill_milestone(agent, chronicle, tick, line);
+                            let _ = grow_skill(&mut agent.skills.foraging, FORAGING_GROWTH);
+                            if !agent.milestone_foraging
+                                && agent.skills.foraging >= FORAGING_MASTER_THRESHOLD
+                                && chronicle.try_foraging_milestone_year(tick)
+                            {
+                                agent.milestone_foraging = true;
+                                agent.last_skill_event_year = Some(tick / TICKS_PER_YEAR);
+                                chronicle.record(Event::new(
+                                    tick,
+                                    format!(
+                                        "{} grows masterful at finding food.",
+                                        agent.name
+                                    ),
+                                ));
                             }
                         }
                     }

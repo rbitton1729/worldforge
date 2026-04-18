@@ -92,6 +92,7 @@ pub struct Chronicle {
     last_header: Option<(u64, u64)>, // (year, season_index)
     header_stats: Option<(usize, usize)>, // (alive souls, alive settlements)
     color: bool,
+    last_foraging_milestone_year: Option<u64>,
 }
 
 impl Chronicle {
@@ -103,6 +104,7 @@ impl Chronicle {
             last_header: None,
             header_stats: None,
             color,
+            last_foraging_milestone_year: None,
         }
     }
 
@@ -114,6 +116,7 @@ impl Chronicle {
             last_header: None,
             header_stats: None,
             color: false,
+            last_foraging_milestone_year: None,
         })
     }
 
@@ -125,7 +128,21 @@ impl Chronicle {
             last_header: None,
             header_stats: None,
             color: false,
+            last_foraging_milestone_year: None,
         }
+    }
+
+    /// Rate-limit the "grows masterful at finding food" line to at most once
+    /// per simulated year across the whole world. Agents churn fast; without
+    /// this gate the line dominates the chronicle even after per-agent dedup.
+    /// Returns true (and records the year) when the caller may emit.
+    pub fn try_foraging_milestone_year(&mut self, tick: u64) -> bool {
+        let year = tick / TICKS_PER_YEAR;
+        if self.last_foraging_milestone_year == Some(year) {
+            return false;
+        }
+        self.last_foraging_milestone_year = Some(year);
+        true
     }
 
     /// Enable or disable ANSI coloring. Used for --no-color overrides.
