@@ -13,3 +13,5 @@ noise = "0.9"
 rand = "0.8"
 rand_chacha = "0.3"
 clap = { version = "4", features = ["derive"] }
+ratatui = "0.28"
+crossterm = "0.28"

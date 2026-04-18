@@ -164,6 +164,12 @@ impl Chronicle {
         self.pending.push(event);
     }
 
+    /// Read the current tick's buffered events without consuming them. The TUI
+    /// uses this to populate its event feed before `flush_tick` writes them out.
+    pub fn peek_pending(&self) -> &[Event] {
+        &self.pending
+    }
+
     /// Update the souls/settlements counts woven into the next season header.
     pub fn set_header_stats(&mut self, alive_souls: usize, alive_settlements: usize) {
         self.header_stats = Some((alive_souls, alive_settlements));

@@ -1,7 +1,7 @@
 use clap::Parser;
 use rand::Rng;
 use worldforge::chronicle::Chronicle;
-use worldforge::{run_simulation, SimConfig};
+use worldforge::{run_simulation, tui, SimConfig};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -63,24 +63,24 @@ struct Cli {
 fn main() {
     let cli = Cli::parse();
 
-    if cli.gui {
-        eprintln!("worldforge: --gui is reserved for Phase 6 and not yet implemented.");
-    }
-
     let seed = cli.seed.unwrap_or_else(|| {
         let mut sys_rng = rand::thread_rng();
         sys_rng.r#gen()
     });
 
-    let mut chronicle = match cli.chronicle.as_deref() {
-        Some(path) => match Chronicle::to_file(path) {
+    // In TUI mode, stdout is taken over by the alternate screen — writing the
+    // chronicle there would corrupt the display. Default to sink unless the
+    // user explicitly routed chronicle output to a file.
+    let mut chronicle = match (cli.gui, cli.chronicle.as_deref()) {
+        (_, Some(path)) => match Chronicle::to_file(path) {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("worldforge: cannot open chronicle file {}: {}", path, e);
                 std::process::exit(1);
             }
         },
-        None => Chronicle::to_stdout(),
+        (true, None) => Chronicle::sink(),
+        (false, None) => Chronicle::to_stdout(),
     };
 
     if cli.no_color {
@@ -99,5 +99,12 @@ fn main() {
         profile: cli.profile,
     };
 
-    run_simulation(cfg, &mut chronicle);
+    if cli.gui {
+        if let Err(e) = tui::run(cfg, &mut chronicle) {
+            eprintln!("worldforge: TUI failed: {}", e);
+            std::process::exit(1);
+        }
+    } else {
+        run_simulation(cfg, &mut chronicle);
+    }
 }

@@ -2,6 +2,7 @@ pub mod agent;
 pub mod chronicle;
 pub mod region;
 pub mod settlement;
+pub mod tui;
 pub mod world;
 pub mod worldgen;
 
