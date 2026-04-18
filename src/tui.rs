@@ -605,22 +605,63 @@ fn format_event_line(tick: u64, text: &str, max_width: usize, depth: usize) -> L
     } else {
         text.to_string()
     };
-    let body_color = if depth == 0 {
-        // Highlight dramatic lines (the chronicle uses *** markers for them).
-        if body.starts_with("***") {
-            Color::Rgb(255, 200, 120)
-        } else {
-            Color::Rgb(230, 230, 230)
-        }
+    // Dim factor scales with depth so older lines fade into the background.
+    let dim_factor = if depth == 0 {
+        1.0
     } else if depth <= 2 {
-        Color::Rgb(200, 200, 200)
+        0.85
     } else if depth <= 6 {
-        Color::Rgb(160, 160, 160)
+        0.65
     } else {
-        Color::Rgb(120, 120, 120)
+        0.5
+    };
+    let dim = |c: Color| -> Color {
+        match c {
+            Color::Rgb(r, g, b) => Color::Rgb(
+                (r as f32 * dim_factor) as u8,
+                (g as f32 * dim_factor) as u8,
+                (b as f32 * dim_factor) as u8,
+            ),
+            other => other,
+        }
+    };
+    // Pick body color based on content keywords.
+    let body_color = if body.starts_with("***") {
+        // Dramatic chronicle events
+        dim(Color::Rgb(255, 200, 120))
+    } else if body.contains("raid") || body.contains("burn") || body.contains("sack")
+        || body.contains("attack") || body.contains("war")
+    {
+        dim(Color::Rgb(255, 100, 90))
+    } else if body.contains("founded") || body.contains("settlement")
+        || body.contains("established")
+    {
+        dim(Color::Rgb(120, 200, 255))
+    } else if body.contains("alliance") || body.contains("allied") || body.contains("trade")
+        || body.contains("treaty")
+    {
+        dim(Color::Rgb(200, 230, 120))
+    } else if body.contains("famine") || body.contains("starv") || body.contains("dwindle")
+        || body.contains("died") || body.contains("fallen") || body.contains("perish")
+    {
+        dim(Color::Rgb(230, 150, 150))
+    } else if body.contains("birth") || body.contains("swell") || body.contains("born")
+        || body.contains("child")
+    {
+        dim(Color::Rgb(150, 230, 150))
+    } else if body.contains("custom") || body.contains("tradition") || body.contains("legend")
+        || body.contains("epithet")
+    {
+        dim(Color::Rgb(220, 180, 255))
+    } else if body.contains("climate") || body.contains("drought") || body.contains("flood")
+        || body.contains("harsh winter") || body.contains("mild")
+    {
+        dim(Color::Rgb(180, 220, 240))
+    } else {
+        dim(Color::Rgb(220, 220, 220))
     };
     Line::from(vec![
-        Span::styled(prefix, Style::default().fg(Color::Rgb(105, 105, 115))),
+        Span::styled(prefix, Style::default().fg(dim(Color::Rgb(130, 130, 150)))),
         Span::styled(body, Style::default().fg(body_color)),
     ])
 }
@@ -1051,7 +1092,7 @@ fn draw_map_zoomed_in(
 ) {
     let tile_w: i32 = 2; // terminal columns per tile
     let tiles_cols = (inner.width as i32) / tile_w;
-    let tiles_rows = inner.height as i32; // each term row = 2 world rows via ▀
+    let tiles_rows = (inner.height as i32) / 2; // each term row = 2 world rows via ▀
     if tiles_cols <= 0 || tiles_rows <= 0 {
         return;
     }
