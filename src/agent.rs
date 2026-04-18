@@ -270,23 +270,11 @@ pub fn step_agents(
                     None
                 };
 
-                let (nc, nr) = match target {
+                let next = match target {
                     Some((tc, tr)) => step_toward(world, agent.col, agent.row, tc, tr),
                     None => wander(world, agent.col, agent.row, rng),
                 };
-
-                if world.is_land(nc, nr) {
-                    let stepped_onto_mountain = (nc, nr) != (agent.col, agent.row)
-                        && world
-                            .tile(nc, nr)
-                            .map_or(false, |t| t.biome == Biome::Mountains);
-                    agent.col = nc;
-                    agent.row = nr;
-                    if stepped_onto_mountain {
-                        agent.hunger =
-                            (agent.hunger + MOUNTAIN_MOVE_HUNGER).min(HUNGER_MAX);
-                    }
-                }
+                move_agent_to(world, agent, next);
             }
 
             // Settled foragers gather surplus for the stockpile.
@@ -425,20 +413,18 @@ fn step_merchant(
     chronicle: &mut Chronicle,
     tick: u64,
 ) {
-    // If the home settlement is gone mid-trip, abort the trip and orphan.
+    // If the home settlement is gone mid-trip, orphan the agent but preserve
+    // cargo and destination — the merchant still delivers what they carry.
     let home_alive = agent
         .settlement
         .and_then(|id| settlements.list.iter().find(|s| s.id == id))
         .map_or(false, |s| s.alive);
     if !home_alive {
-        agent.cargo = 0.0;
-        agent.destination = None;
-        agent.cargo_origin = None;
         agent.settlement = None;
-        return;
     }
 
     // Eat from cargo when hungry, so merchants don't starve on the road.
+    // Cargo consumed this way is not "lost" — it converts to hunger relief.
     if agent.hunger >= 50.0 && agent.cargo >= 0.5 {
         let bite = BITE_SIZE.min(agent.cargo);
         agent.cargo -= bite;
@@ -477,23 +463,30 @@ fn step_merchant(
                         .map(|s| s.stockpile)
                         .unwrap_or(0.0);
                     let delivered = agent.cargo;
-                    if let Some(dest_s) =
-                        settlements.list.iter_mut().find(|s| s.id == dest_id)
-                    {
-                        let needy = dest_s.stockpile < origin_stock + 1.0;
-                        if delivered >= 0.5 && needy {
-                            dest_s.stockpile += delivered;
-                            // Occasional chronicle of arrival keeps the log from flooding.
-                            if rng.gen_bool(0.2) {
-                                chronicle.record(Event::new(
-                                    tick,
-                                    format!(
-                                        "A merchant arrives at {} bearing grain from distant {}.",
-                                        dname, origin_name
-                                    ),
-                                ));
-                            }
-                        }
+                    // Conservation: whatever the merchant arrived with enters
+                    // the destination stockpile, every time. The `needy` flag
+                    // only gates the chronicle narration, not the transfer.
+                    let needy = {
+                        let dest_s = settlements
+                            .list
+                            .iter_mut()
+                            .find(|s| s.id == dest_id)
+                            .unwrap();
+                        let was_needy = dest_s.stockpile < origin_stock + 1.0;
+                        dest_s.stockpile += delivered;
+                        was_needy
+                    };
+                    agent.cargo = 0.0;
+                    agent.cargo_origin = None;
+
+                    if delivered >= 0.5 && needy && rng.gen_bool(0.2) {
+                        chronicle.record(Event::new(
+                            tick,
+                            format!(
+                                "A merchant arrives at {} bearing grain from distant {}.",
+                                dname, origin_name
+                            ),
+                        ));
                     }
                     // Record the trip on both endpoints, and chronicle a new trade road once.
                     let mut road_formed = false;
@@ -544,8 +537,6 @@ fn step_merchant(
                             chronicle.record(Event::new(tick, line));
                         }
                     }
-                    agent.cargo = 0.0;
-                    agent.cargo_origin = None;
                     agent.destination = None;
                     agent.settlement = Some(dest_id);
                     if grow_skill(&mut agent.skills.trading, TRADING_GROWTH) {
@@ -554,23 +545,12 @@ fn step_merchant(
                         record_skill_milestone(agent, chronicle, tick, line);
                     }
                 } else {
-                    let (nc, nr) = step_toward(world, agent.col, agent.row, dc, dr);
-                    if world.is_land(nc, nr) {
-                        let stepped_onto_mountain = (nc, nr) != (agent.col, agent.row)
-                            && world
-                                .tile(nc, nr)
-                                .map_or(false, |t| t.biome == Biome::Mountains);
-                        agent.col = nc;
-                        agent.row = nr;
-                        if stepped_onto_mountain {
-                            agent.hunger =
-                                (agent.hunger + MOUNTAIN_MOVE_HUNGER).min(HUNGER_MAX);
-                        }
-                    }
+                    move_agent_to(world, agent, step_toward(world, agent.col, agent.row, dc, dr));
                 }
             }
             None => {
-                // Destination vanished; drop it and idle.
+                // Destination vanished. The merchant has nowhere to deliver;
+                // cargo is lost (same as a merchant dying mid-journey).
                 agent.destination = None;
                 agent.cargo = 0.0;
                 agent.cargo_origin = None;
@@ -580,10 +560,28 @@ fn step_merchant(
     }
 
     // No destination but `is_traveling()` was true means cargo > 0 with no
-    // active route — discard the orphaned cargo. Reaching here is rare.
+    // active route — cargo is lost (should be unreachable in normal flow).
     let _ = (rng, world);
     agent.cargo = 0.0;
     agent.cargo_origin = None;
+}
+
+/// Move `agent` onto `target` if the tile is land. Stepping onto a mountain
+/// costs extra hunger (MOUNTAIN_MOVE_HUNGER). A no-op when the target isn't
+/// land or when it equals the current position.
+fn move_agent_to(world: &World, agent: &mut Agent, target: (i32, i32)) {
+    let (nc, nr) = target;
+    if !world.is_land(nc, nr) || (nc, nr) == (agent.col, agent.row) {
+        return;
+    }
+    let stepped_onto_mountain = world
+        .tile(nc, nr)
+        .map_or(false, |t| t.biome == Biome::Mountains);
+    agent.col = nc;
+    agent.row = nr;
+    if stepped_onto_mountain {
+        agent.hunger = (agent.hunger + MOUNTAIN_MOVE_HUNGER).min(HUNGER_MAX);
+    }
 }
 
 /// Scan hex tiles within `radius` for the one with the most food; return its coords.

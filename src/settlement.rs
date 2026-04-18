@@ -574,6 +574,59 @@ fn slay_warriors(agents: &mut [Agent], sid: u32, n: u32) -> u32 {
     killed
 }
 
+/// Apply warrior casualties, chronicle a "Battle of X" line when losses are
+/// heavy, record the raid on both sides, and chronicle any fresh blood feud.
+/// Shared post-raid bookkeeping for the success and repelled branches (the
+/// sack branch is distinct because the target is destroyed outright).
+fn resolve_raid_outcome(
+    settlements: &mut Settlements,
+    agents: &mut [Agent],
+    raider_id: u32,
+    target_id: u32,
+    raider_name: &str,
+    target_name: &str,
+    atk_losses: u32,
+    def_losses: u32,
+    chronicle: &mut Chronicle,
+    tick: u64,
+) {
+    slay_warriors(agents, raider_id, atk_losses);
+    slay_warriors(agents, target_id, def_losses);
+
+    if atk_losses + def_losses >= 3 {
+        chronicle.record(Event::new(
+            tick,
+            format!(
+                "*** The Battle of {} — {} warriors fall ***",
+                target_name,
+                atk_losses + def_losses
+            ),
+        ));
+    }
+
+    let feud_r = settlements
+        .list
+        .iter_mut()
+        .find(|s| s.id == raider_id)
+        .map(|s| s.note_raid(target_id))
+        .unwrap_or(false);
+    let feud_t = settlements
+        .list
+        .iter_mut()
+        .find(|s| s.id == target_id)
+        .map(|s| s.note_raid(raider_id))
+        .unwrap_or(false);
+    if feud_r || feud_t {
+        chronicle.record(Event::new(
+            tick,
+            format!(
+                "A blood feud takes root between {} and {}.",
+                raider_name, target_name
+            ),
+        ));
+    }
+}
+
 /// Reward all surviving warriors of `sid` with combat experience after a
 /// raid, and emit a one-per-year chronicle line for any who just crossed
 /// into "seasoned warrior" territory.
@@ -832,12 +885,6 @@ fn raid_phase(
             if let Some(r) = settlements.list.iter_mut().find(|s| s.id == raider_id) {
                 r.stockpile += taken;
             }
-            // Both sides suffer some warrior losses.
-            let atk_losses = rng.gen_range(0..=1);
-            let def_losses = rng.gen_range(1..=2).min(defenders.max(1));
-            slay_warriors(agents, raider_id, atk_losses);
-            slay_warriors(agents, target_id, def_losses);
-
             chronicle.record(Event::new(
                 tick,
                 format!(
@@ -845,45 +892,21 @@ fn raid_phase(
                     raider_name, target_name
                 ),
             ));
-            if atk_losses + def_losses >= 3 {
-                chronicle.record(Event::new(
-                    tick,
-                    format!(
-                        "*** The Battle of {} — {} warriors fall ***",
-                        target_name,
-                        atk_losses + def_losses
-                    ),
-                ));
-            }
-
-            let feud_r = settlements
-                .list
-                .iter_mut()
-                .find(|s| s.id == raider_id)
-                .map(|s| s.note_raid(target_id))
-                .unwrap_or(false);
-            let feud_t = settlements
-                .list
-                .iter_mut()
-                .find(|s| s.id == target_id)
-                .map(|s| s.note_raid(raider_id))
-                .unwrap_or(false);
-            if feud_r || feud_t {
-                chronicle.record(Event::new(
-                    tick,
-                    format!(
-                        "A blood feud takes root between {} and {}.",
-                        raider_name, target_name
-                    ),
-                ));
-            }
+            let atk_losses = rng.gen_range(0..=1);
+            let def_losses = rng.gen_range(1..=2).min(defenders.max(1));
+            resolve_raid_outcome(
+                settlements,
+                agents,
+                raider_id,
+                target_id,
+                &raider_name,
+                &target_name,
+                atk_losses,
+                def_losses,
+                chronicle,
+                tick,
+            );
         } else {
-            // Repelled: attackers lose warriors, defenders lose a few too.
-            let atk_losses = rng.gen_range(2..=3).min(attackers);
-            let def_losses = rng.gen_range(0..=1);
-            slay_warriors(agents, raider_id, atk_losses);
-            slay_warriors(agents, target_id, def_losses);
-
             chronicle.record(Event::new(
                 tick,
                 format!(
@@ -891,38 +914,20 @@ fn raid_phase(
                     target_name
                 ),
             ));
-            if atk_losses + def_losses >= 3 {
-                chronicle.record(Event::new(
-                    tick,
-                    format!(
-                        "*** The Battle of {} — {} warriors fall ***",
-                        target_name,
-                        atk_losses + def_losses
-                    ),
-                ));
-            }
-
-            let feud_r = settlements
-                .list
-                .iter_mut()
-                .find(|s| s.id == raider_id)
-                .map(|s| s.note_raid(target_id))
-                .unwrap_or(false);
-            let feud_t = settlements
-                .list
-                .iter_mut()
-                .find(|s| s.id == target_id)
-                .map(|s| s.note_raid(raider_id))
-                .unwrap_or(false);
-            if feud_r || feud_t {
-                chronicle.record(Event::new(
-                    tick,
-                    format!(
-                        "A blood feud takes root between {} and {}.",
-                        raider_name, target_name
-                    ),
-                ));
-            }
+            let atk_losses = rng.gen_range(2..=3).min(attackers);
+            let def_losses = rng.gen_range(0..=1);
+            resolve_raid_outcome(
+                settlements,
+                agents,
+                raider_id,
+                target_id,
+                &raider_name,
+                &target_name,
+                atk_losses,
+                def_losses,
+                chronicle,
+                tick,
+            );
         }
 
         // Combat experience: every surviving warrior who took the field

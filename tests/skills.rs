@@ -71,9 +71,9 @@ fn no_coin_flip_roles_for_newborns_in_long_run() {
         height: 40,
         agents: 200,
         ticks: 600,
-        chronicle_path: None,
+        tick_rate: None,
     };
-    let outcome = run_simulation(cfg);
+    let outcome = run_simulation(cfg, &mut Chronicle::sink());
     for a in &outcome.agents {
         if a.is_warrior() {
             assert!(

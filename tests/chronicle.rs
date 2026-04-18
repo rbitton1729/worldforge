@@ -1,3 +1,4 @@
+use worldforge::chronicle::Chronicle;
 use worldforge::{run_simulation, SimConfig};
 
 fn run_and_read(seed: u64, ticks: u64, path_suffix: &str) -> String {
@@ -8,9 +9,11 @@ fn run_and_read(seed: u64, ticks: u64, path_suffix: &str) -> String {
         height: 30,
         agents: 150,
         ticks,
-        chronicle_path: Some(path.to_string_lossy().to_string()),
+        tick_rate: None,
     };
-    let _ = run_simulation(cfg);
+    let mut chronicle = Chronicle::to_file(path.to_str().unwrap()).unwrap();
+    run_simulation(cfg, &mut chronicle);
+    drop(chronicle);
     std::fs::read_to_string(&path).expect("chronicle readable")
 }
 

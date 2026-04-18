@@ -1,3 +1,4 @@
+use worldforge::chronicle::Chronicle;
 use worldforge::{run_simulation, SimConfig};
 
 #[test]
@@ -9,9 +10,9 @@ fn settlements_form_when_agents_cluster() {
         height: 40,
         agents: 200,
         ticks: 300,
-        chronicle_path: None,
+        tick_rate: None,
     };
-    let outcome = run_simulation(cfg);
+    let outcome = run_simulation(cfg, &mut Chronicle::sink());
     assert!(
         !outcome.settlements.list.is_empty(),
         "expected at least one settlement to form"
@@ -26,9 +27,9 @@ fn settlement_stockpiles_accumulate() {
         height: 40,
         agents: 200,
         ticks: 400,
-        chronicle_path: None,
+        tick_rate: None,
     };
-    let outcome = run_simulation(cfg);
+    let outcome = run_simulation(cfg, &mut Chronicle::sink());
     let max_stockpile = outcome
         .settlements
         .list
@@ -52,9 +53,9 @@ fn settlements_can_be_abandoned() {
         height: 15,
         agents: 120,
         ticks: 1500,
-        chronicle_path: None,
+        tick_rate: None,
     };
-    let outcome = run_simulation(cfg);
+    let outcome = run_simulation(cfg, &mut Chronicle::sink());
     let any_founded = !outcome.settlements.list.is_empty();
     let any_abandoned = outcome.settlements.list.iter().any(|s| !s.alive);
     // If none founded, the test is inconclusive for this assertion — try a looser check.
@@ -77,9 +78,9 @@ fn settlement_population_matches_agents() {
         height: 40,
         agents: 200,
         ticks: 250,
-        chronicle_path: None,
+        tick_rate: None,
     };
-    let outcome = run_simulation(cfg);
+    let outcome = run_simulation(cfg, &mut Chronicle::sink());
     for s in outcome.settlements.list.iter().filter(|s| s.alive) {
         let actual = outcome
             .agents

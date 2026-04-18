@@ -1,4 +1,5 @@
 use worldforge::agent::alive_count;
+use worldforge::chronicle::Chronicle;
 use worldforge::{run_simulation, SimConfig};
 
 #[test]
@@ -11,9 +12,9 @@ fn population_is_never_negative() {
         height: 20,
         agents: 50,
         ticks: 200,
-        chronicle_path: None,
+        tick_rate: None,
     };
-    let outcome = run_simulation(cfg);
+    let outcome = run_simulation(cfg, &mut Chronicle::sink());
     let alive = alive_count(&outcome.agents);
     assert!(alive <= outcome.agents.len());
 }
@@ -26,17 +27,20 @@ fn same_seed_same_final_population() {
         height: 30,
         agents: 100,
         ticks: 250,
-        chronicle_path: None,
+        tick_rate: None,
     };
-    let a = run_simulation(SimConfig { ..base });
-    let b = run_simulation(SimConfig {
-        seed: 314,
-        width: 60,
-        height: 30,
-        agents: 100,
-        ticks: 250,
-        chronicle_path: None,
-    });
+    let a = run_simulation(SimConfig { ..base }, &mut Chronicle::sink());
+    let b = run_simulation(
+        SimConfig {
+            seed: 314,
+            width: 60,
+            height: 30,
+            agents: 100,
+            ticks: 250,
+            tick_rate: None,
+        },
+        &mut Chronicle::sink(),
+    );
     assert_eq!(alive_count(&a.agents), alive_count(&b.agents));
     assert_eq!(a.agents.len(), b.agents.len());
     assert_eq!(a.settlements.list.len(), b.settlements.list.len());
@@ -51,9 +55,9 @@ fn simulation_terminates_at_requested_ticks() {
         height: 30,
         agents: 100,
         ticks: 50,
-        chronicle_path: None,
+        tick_rate: None,
     };
-    let outcome = run_simulation(cfg);
+    let outcome = run_simulation(cfg, &mut Chronicle::sink());
     assert!(
         outcome.final_tick <= 50,
         "final_tick {} exceeded requested 50",
@@ -70,9 +74,11 @@ fn chronicle_output_is_nonempty() {
         height: 20,
         agents: 50,
         ticks: 100,
-        chronicle_path: Some(path.to_string_lossy().to_string()),
+        tick_rate: None,
     };
-    let _ = run_simulation(cfg);
+    let mut chronicle = Chronicle::to_file(path.to_str().unwrap()).unwrap();
+    run_simulation(cfg, &mut chronicle);
+    drop(chronicle);
     let contents = std::fs::read_to_string(&path).expect("chronicle file");
     assert!(!contents.is_empty(), "chronicle file should have content");
     assert!(
@@ -90,9 +96,9 @@ fn no_panic_on_tiny_map() {
         height: 10,
         agents: 5,
         ticks: 50,
-        chronicle_path: None,
+        tick_rate: None,
     };
-    let _ = run_simulation(cfg);
+    let _ = run_simulation(cfg, &mut Chronicle::sink());
 }
 
 #[test]
@@ -103,9 +109,9 @@ fn no_panic_on_zero_agents() {
         height: 15,
         agents: 0,
         ticks: 20,
-        chronicle_path: None,
+        tick_rate: None,
     };
-    let outcome = run_simulation(cfg);
+    let outcome = run_simulation(cfg, &mut Chronicle::sink());
     assert_eq!(alive_count(&outcome.agents), 0);
     assert!(outcome.agents.is_empty());
 }
@@ -118,9 +124,9 @@ fn agent_health_and_hunger_bounded() {
         height: 25,
         agents: 80,
         ticks: 300,
-        chronicle_path: None,
+        tick_rate: None,
     };
-    let outcome = run_simulation(cfg);
+    let outcome = run_simulation(cfg, &mut Chronicle::sink());
     for a in &outcome.agents {
         assert!(a.hunger >= 0.0, "hunger went negative: {}", a.hunger);
         assert!(a.hunger <= 100.0 + 1e-3, "hunger exceeded max: {}", a.hunger);

@@ -2,6 +2,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use worldforge::agent::{alive_count, seed_agents, Agent};
 use worldforge::world::World;
+use worldforge::chronicle::Chronicle;
 use worldforge::{run_simulation, SimConfig};
 
 #[test]
@@ -71,9 +72,9 @@ fn agents_can_starve_on_barren_map() {
         height: 10,
         agents: 80,
         ticks: 400,
-        chronicle_path: None,
+        tick_rate: None,
     };
-    let outcome = run_simulation(cfg);
+    let outcome = run_simulation(cfg, &mut Chronicle::sink());
     let dead = outcome.agents.iter().filter(|a| !a.alive).count();
     assert!(
         dead > 0,
@@ -91,9 +92,9 @@ fn agents_can_reproduce() {
         height: 40,
         agents: 200,
         ticks: 300,
-        chronicle_path: None,
+        tick_rate: None,
     };
-    let outcome = run_simulation(cfg);
+    let outcome = run_simulation(cfg, &mut Chronicle::sink());
     // Newborns get IDs >= initial seeded count; if len > initial, births occurred.
     assert!(
         outcome.agents.len() > 200,
@@ -112,9 +113,9 @@ fn agents_die_of_old_age() {
         height: 40,
         agents: 100,
         ticks: 4000,
-        chronicle_path: None,
+        tick_rate: None,
     };
-    let outcome = run_simulation(cfg);
+    let outcome = run_simulation(cfg, &mut Chronicle::sink());
     let old_age_deaths = outcome
         .agents
         .iter()

@@ -1,4 +1,5 @@
 use worldforge::world::{Biome, World};
+use worldforge::chronicle::Chronicle;
 use worldforge::{run_simulation, SimConfig};
 
 /// Find a plains tile at full fertility, not adjacent to a river (so the
@@ -184,9 +185,9 @@ fn simulation_keeps_fertility_bounded() {
         height: 40,
         agents: 200,
         ticks: 400,
-        chronicle_path: None,
+        tick_rate: None,
     };
-    let outcome = run_simulation(cfg);
+    let outcome = run_simulation(cfg, &mut Chronicle::sink());
     for t in &outcome.world.tiles {
         assert!(
             (0.0..=1.0).contains(&t.fertility),
@@ -215,9 +216,9 @@ fn foraging_depletes_land() {
         height: 40,
         agents: 200,
         ticks: 400,
-        chronicle_path: None,
+        tick_rate: None,
     };
-    let outcome = run_simulation(cfg);
+    let outcome = run_simulation(cfg, &mut Chronicle::sink());
     let min_fertile_biome = outcome
         .world
         .tiles

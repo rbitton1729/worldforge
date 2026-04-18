@@ -1,3 +1,4 @@
+use worldforge::chronicle::Chronicle;
 use worldforge::world::World;
 use worldforge::{run_simulation, SimConfig};
 
@@ -80,9 +81,11 @@ fn named_regions_appear_in_settlement_founding() {
             height: 40,
             agents: 300,
             ticks: 120,
-            chronicle_path: Some(path.to_string_lossy().to_string()),
+            tick_rate: None,
         };
-        let outcome = run_simulation(cfg);
+        let mut chronicle = Chronicle::to_file(path.to_str().unwrap()).unwrap();
+        let outcome = run_simulation(cfg, &mut chronicle);
+        drop(chronicle);
         let content = std::fs::read_to_string(&path).unwrap();
         for line in content.lines() {
             if line.contains("settlers gathers in ")

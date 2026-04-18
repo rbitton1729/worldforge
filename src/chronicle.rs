@@ -117,6 +117,17 @@ impl Chronicle {
         })
     }
 
+    /// Discard all output. Used by tests that don't need the chronicle.
+    pub fn sink() -> Self {
+        Self {
+            writer: Box::new(io::sink()),
+            pending: Vec::new(),
+            last_header: None,
+            header_stats: None,
+            color: false,
+        }
+    }
+
     /// Enable or disable ANSI coloring. Used for --no-color overrides.
     pub fn set_color(&mut self, color: bool) {
         self.color = color;

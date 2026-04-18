@@ -11,7 +11,6 @@ pub fn generate_tiles(width: u32, height: u32, seed: u64) -> Vec<Tile> {
     let elev_noise = Perlin::new(seed as u32);
     let temp_noise = Perlin::new(seed.wrapping_add(1) as u32);
     let moist_noise = Perlin::new(seed.wrapping_add(2) as u32);
-    let detail_noise = Perlin::new(seed.wrapping_add(3) as u32);
 
     let mut tiles = Vec::with_capacity((width * height) as usize);
 
@@ -35,8 +34,6 @@ pub fn generate_tiles(width: u32, height: u32, seed: u64) -> Vec<Tile> {
 
             let m = fbm(&moist_noise, fx * 0.06, fy * 0.06, 3, 0.5, 2.0);
             let moisture = normalize(m);
-
-            let _d = detail_noise.get([fx as f64 * 0.2, fy as f64 * 0.2]) as f32;
 
             let biome = pick_biome(elevation, temperature, moisture);
 
