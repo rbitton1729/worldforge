@@ -3,6 +3,7 @@ use crate::chronicle::{Chronicle, Event, TICKS_PER_YEAR};
 use crate::world::World;
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
+use std::collections::HashMap;
 
 /// Trips on a declared route beyond which the two settlements pledge alliance.
 const ALLIANCE_TRIPS: u32 = 5;
@@ -236,25 +237,39 @@ pub fn update_settlements(
 
     // Gather every eligible cluster (size + not too close to existing settlements),
     // then found only the largest one this tick. Deliberate pacing.
-    let mut best: Option<(usize, i32, i32, Vec<usize>)> = None;
+    //
+    // Spatial hash: bucket eligible agents by tile once (O(n)), then per-agent
+    // only scan the hex neighborhood within CLUSTER_RADIUS instead of every
+    // agent in the world.
+    let mut position_bucket: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
     for &i in &unaffiliated {
         let a = &agents[i];
+        position_bucket.entry((a.col, a.row)).or_default().push(i);
+    }
+
+    let mut best: Option<(usize, i32, i32, Vec<usize>)> = None;
+    for &i in &unaffiliated {
+        let (ac, ar) = (agents[i].col, agents[i].row);
         let mut neighbors: Vec<usize> = Vec::new();
-        for (j, other) in agents.iter().enumerate() {
-            if !other.alive || other.is_traveling() || other.settlement.is_some() {
-                continue;
-            }
-            if world.hex_distance((a.col, a.row), (other.col, other.row)) <= CLUSTER_RADIUS {
-                neighbors.push(j);
+        for dc in -CLUSTER_RADIUS..=CLUSTER_RADIUS {
+            for dr in -CLUSTER_RADIUS..=CLUSTER_RADIUS {
+                let c = ac + dc;
+                let r = ar + dr;
+                if world.hex_distance((ac, ar), (c, r)) > CLUSTER_RADIUS {
+                    continue;
+                }
+                if let Some(list) = position_bucket.get(&(c, r)) {
+                    neighbors.extend_from_slice(list);
+                }
             }
         }
-        if neighbors.len() >= FOUND_THRESHOLD && !settlements.too_close(world, a.col, a.row) {
+        if neighbors.len() >= FOUND_THRESHOLD && !settlements.too_close(world, ac, ar) {
             let better = match &best {
                 None => true,
                 Some((n, _, _, _)) => neighbors.len() > *n,
             };
             if better {
-                best = Some((neighbors.len(), a.col, a.row, neighbors));
+                best = Some((neighbors.len(), ac, ar, neighbors));
             }
         }
     }
@@ -338,14 +353,20 @@ pub fn update_settlements(
     }
 
     // Recount populations and retire any settlement that's lost all its people.
+    // Build the count map in one O(n) pass so the per-settlement loop is O(1) each.
+    let mut pop_by_settlement: HashMap<u32, u32> = HashMap::new();
+    for a in agents.iter() {
+        if a.alive {
+            if let Some(sid) = a.settlement {
+                *pop_by_settlement.entry(sid).or_insert(0) += 1;
+            }
+        }
+    }
     for s in settlements.list.iter_mut() {
         if !s.alive {
             continue;
         }
-        let pop = agents
-            .iter()
-            .filter(|a| a.alive && a.settlement == Some(s.id))
-            .count() as u32;
+        let pop = pop_by_settlement.get(&s.id).copied().unwrap_or(0);
         if pop == 0 && s.population > 0 {
             s.alive = false;
             chronicle.record(Event::new(
