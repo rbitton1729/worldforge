@@ -13,8 +13,8 @@ Settlements form, trade, raid each other, develop traits. The chronicle narrates
 - [ ] Passes through mountains — make mountains traversable but costly
 
 ## v0.3.0 — Culture
-- [ ] Great individuals — agents that do exceptional things get named and remembered
-  ("Kael the Wanderer, who crossed the desert alone", "Rowan who founded three settlements")
+- [x] Great individuals — agents that do exceptional things get named and remembered
+  (epithets like "the Conqueror", "the Wanderer" based on deeds: raiding, trading, surviving)
 - [ ] Customs emerge — settlements develop traditions from behavior patterns
   ("The people of Thornhold feast at harvest", "Velmara sends its youth on a year's journey")
 - [ ] Languages — settlements that are far apart develop different name generators

@@ -285,6 +285,7 @@ pub fn update_settlements(
         let id = settlements.found(ac, ar, tick, rng);
         for &j in &neighbors {
             agents[j].settlement = Some(id);
+            agents[j].deeds.founded_settlement = true;
             // No coin-flip role assignment — roles emerge from what an agent
             // does, not from a die roll at settlement-joining.
         }
@@ -422,6 +423,56 @@ pub fn update_settlements(
             }
         }
     }
+
+    // Great individuals: recognize agents whose deeds cross notability thresholds.
+    recognize_great_individuals(agents, chronicle, tick);
+}
+
+/// Scan all living agents and recognize any who have crossed a notability
+/// threshold but haven't been given an epithet yet. Each agent earns at most
+/// one epithet in their lifetime. The chronicle line includes their name with
+/// the epithet and a brief description of what earned it.
+fn recognize_great_individuals(
+    agents: &mut [Agent],
+    chronicle: &mut Chronicle,
+    tick: u64,
+) {
+    use crate::agent::choose_epithet;
+    for agent in agents.iter_mut() {
+        if !agent.alive || agent.epithet.is_some() {
+            continue;
+        }
+        if !agent.deeds.is_notable() {
+            continue;
+        }
+        let epithet = choose_epithet(&agent.deeds, agent.id);
+        let reason = describe_deeds(&agent.deeds);
+        agent.epithet = Some(epithet.to_string());
+        chronicle.record(Event::new(
+            tick,
+            format!(
+                "*** {} {} — {} ***",
+                agent.name, epithet, reason
+            ),
+        ));
+    }
+}
+
+/// Produce a human-readable summary of what makes this agent notable.
+fn describe_deeds(deeds: &crate::agent::Deeds) -> &'static str {
+    if deeds.raids_led >= 2 {
+        return "who led raids against rival settlements";
+    }
+    if deeds.deliveries >= 3 {
+        return "who carried trade across the land";
+    }
+    if deeds.survived_sack {
+        return "who survived the fall of their homeland";
+    }
+    if deeds.founded_settlement && deeds.defenses >= 2 {
+        return "who founded a settlement and defended it twice";
+    }
+    "whose deeds will not be forgotten"
 }
 
 fn build_members_map(agents: &[Agent]) -> HashMap<u32, Vec<usize>> {
@@ -638,6 +689,31 @@ fn warrior_strength(
         .sum()
 }
 
+/// Mark the single highest-fighting warrior of settlement `sid` as having
+/// led a raid. If multiple are tied, the lowest-indexed agent wins (deterministic).
+fn mark_raid_leader(
+    agents: &mut [Agent],
+    members_by_settlement: &HashMap<u32, Vec<usize>>,
+    sid: u32,
+) {
+    let Some(list) = members_by_settlement.get(&sid) else {
+        return;
+    };
+    let mut best: Option<usize> = None;
+    let mut best_skill: f32 = -1.0;
+    for &i in list {
+        let a = &agents[i];
+        if a.alive && a.is_warrior() && a.settlement == Some(sid) && a.skills.fighting > best_skill
+        {
+            best = Some(i);
+            best_skill = a.skills.fighting;
+        }
+    }
+    if let Some(idx) = best {
+        agents[idx].deeds.raids_led += 1;
+    }
+}
+
 /// Kill up to `n` warriors belonging to settlement `sid`, returning how many fell.
 fn slay_warriors(
     agents: &mut [Agent],
@@ -743,6 +819,10 @@ fn grant_combat_experience(
         }
         if warriors_only && !a.is_warrior() {
             continue;
+        }
+        // Track defense deeds for the defending side (warriors_only == false).
+        if !warriors_only && a.is_warrior() {
+            a.deeds.defenses += 1;
         }
         let before = a.skills.fighting;
         a.skills.fighting = (a.skills.fighting + FIGHTING_GROWTH).min(1.0);
@@ -935,6 +1015,8 @@ fn raid_phase(
         }
 
         if sack {
+            // Mark the top warrior of the raider as having led this raid.
+            mark_raid_leader(agents, members_by_settlement, raider_id);
             // Full sack: destroy defender, transfer stockpile, scatter civilians.
             let (loot, t_col, t_row) = {
                 let t = settlements
@@ -954,6 +1036,7 @@ fn raid_phase(
                 for &i in list {
                     let a = &mut agents[i];
                     if a.alive && a.settlement == Some(target_id) {
+                        a.deeds.survived_sack = true;
                         a.settlement = None;
                         a.cargo = 0.0;
                         a.cargo_origin = None;
@@ -984,6 +1067,8 @@ fn raid_phase(
                 r.note_raid(target_id);
             }
         } else if success {
+            // Mark the top warrior of the raider as having led this raid.
+            mark_raid_leader(agents, members_by_settlement, raider_id);
             // Loot: take a chunk of defender stockpile.
             let taken = {
                 let t = settlements

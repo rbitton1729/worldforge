@@ -49,6 +49,76 @@ pub const WARRIOR_RECOGNITION_THRESHOLD: f32 = 0.3;
 /// no trade trip is initiated.
 pub const MERCHANT_DISPATCH_THRESHOLD: f32 = 0.2;
 
+/// Deeds that mark an agent as extraordinary — tracked individually so the
+/// chronicle can recognize "great individuals" (v0.3.0).
+#[derive(Debug, Clone)]
+pub struct Deeds {
+    /// Number of successful raids this agent led (was the top warrior).
+    pub raids_led: u32,
+    /// Number of successful trade deliveries completed.
+    pub deliveries: u32,
+    /// True if this agent was among the founders of a settlement.
+    pub founded_settlement: bool,
+    /// True if this agent survived a settlement being sacked (was a defender
+    /// when their settlement fell, lived through it).
+    pub survived_sack: bool,
+    /// Number of times this agent defended against a raid.
+    pub defenses: u32,
+}
+
+impl Deeds {
+    pub fn new() -> Self {
+        Self {
+            raids_led: 0,
+            deliveries: 0,
+            founded_settlement: false,
+            survived_sack: false,
+            defenses: 0,
+        }
+    }
+
+    /// Has this agent done enough to be considered "great"?
+    pub fn is_notable(&self) -> bool {
+        self.raids_led >= 2
+            || self.deliveries >= 3
+            || self.survived_sack
+            || (self.founded_settlement && self.defenses >= 2)
+    }
+}
+
+const EPITHET_WARLORD: &[&str] = &[
+    "the Conqueror", "the Iron", "the Fierce", "the Raider", "the Unyielding",
+];
+const EPITHET_MERCHANT: &[&str] = &[
+    "the Wanderer", "the Traveler", "the Roadwise", "the Far-Flung", "the Steadfast",
+];
+const EPITHET_FOUNDER: &[&str] = &[
+    "the Founder", "the Builder", "the Founder-of-Hearth", "the Steadfast",
+];
+const EPITHET_SURVIVOR: &[&str] = &[
+    "the Unbroken", "the Survivor", "the Undying", "the Ash-Walker",
+];
+
+/// Pick an epithet based on the agent's dominant deed. Uses the agent's id
+/// as a deterministic seed for selection so the same agent always gets the
+/// same epithet.
+pub fn choose_epithet(deeds: &Deeds, agent_id: u32) -> &'static str {
+    // Weight: most impressive deed wins.
+    if deeds.raids_led >= 2 {
+        return EPITHET_WARLORD[(agent_id as usize) % EPITHET_WARLORD.len()];
+    }
+    if deeds.deliveries >= 3 {
+        return EPITHET_MERCHANT[(agent_id as usize) % EPITHET_MERCHANT.len()];
+    }
+    if deeds.survived_sack {
+        return EPITHET_SURVIVOR[(agent_id as usize) % EPITHET_SURVIVOR.len()];
+    }
+    if deeds.founded_settlement {
+        return EPITHET_FOUNDER[(agent_id as usize) % EPITHET_FOUNDER.len()];
+    }
+    "the Notable"
+}
+
 /// Hunger above this → starving, agents prioritize food.
 pub const HUNGER_STARVE_THRESHOLD: f32 = 70.0;
 /// Hunger at 100 means the agent starts taking health damage.
@@ -127,6 +197,10 @@ pub struct Agent {
     pub cargo: f32,
     pub cargo_origin: Option<u32>,
     pub destination: Option<u32>,
+    /// Tracks exceptional deeds for great-individual recognition (v0.3.0).
+    pub deeds: Deeds,
+    /// Once an epithet is earned, it's stored here for the chronicle.
+    pub epithet: Option<String>,
 }
 
 impl Agent {
@@ -148,6 +222,8 @@ impl Agent {
             cargo: 0.0,
             cargo_origin: None,
             destination: None,
+            deeds: Deeds::new(),
+            epithet: None,
         }
     }
 
@@ -588,6 +664,7 @@ fn step_merchant(
                     }
                     agent.destination = None;
                     agent.settlement = Some(dest_id);
+                    agent.deeds.deliveries += 1;
                     if grow_skill(&mut agent.skills.trading, TRADING_GROWTH) {
                         let line =
                             format!("{} has become a trusted merchant.", agent.name);
