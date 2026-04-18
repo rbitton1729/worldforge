@@ -10,6 +10,7 @@ fn run_and_read(seed: u64, ticks: u64, path_suffix: &str) -> String {
         agents: 150,
         ticks,
         tick_rate: None,
+        profile: false,
     };
     let mut chronicle = Chronicle::to_file(path.to_str().unwrap()).unwrap();
     run_simulation(cfg, &mut chronicle);

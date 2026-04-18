@@ -84,6 +84,7 @@ fn no_coin_flip_roles_for_newborns_in_long_run() {
         agents: 200,
         ticks: 600,
         tick_rate: None,
+        profile: false,
     };
     let outcome = run_simulation(cfg, &mut Chronicle::sink());
     for a in &outcome.agents {

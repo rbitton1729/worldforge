@@ -82,6 +82,7 @@ fn named_regions_appear_in_settlement_founding() {
             agents: 300,
             ticks: 120,
             tick_rate: None,
+            profile: false,
         };
         let mut chronicle = Chronicle::to_file(path.to_str().unwrap()).unwrap();
         let outcome = run_simulation(cfg, &mut chronicle);

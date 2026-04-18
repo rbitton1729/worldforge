@@ -22,6 +22,9 @@ pub struct SimConfig {
     /// If set, pace each tick to roughly this many ticks per second (real time).
     /// Tests leave this `None` to run flat-out.
     pub tick_rate: Option<f64>,
+    /// Collect per-tick timing stats and print a summary when the run ends.
+    /// Also disables real-time pacing so the loop runs flat-out.
+    pub profile: bool,
 }
 
 impl SimConfig {
@@ -33,6 +36,7 @@ impl SimConfig {
             agents: 200,
             ticks: 200,
             tick_rate: None,
+            profile: false,
         }
     }
 }
@@ -89,10 +93,24 @@ pub fn run_simulation(cfg: SimConfig, chronicle: &mut Chronicle) -> SimOutcome {
     ));
     let _ = chronicle.flush_tick(0);
 
-    let tick_duration = cfg
-        .tick_rate
-        .filter(|r| *r > 0.0)
-        .map(|r| Duration::from_secs_f64(1.0 / r));
+    // --profile disables real-time pacing; it'd just skew the numbers.
+    let tick_duration = if cfg.profile {
+        None
+    } else {
+        cfg.tick_rate
+            .filter(|r| *r > 0.0)
+            .map(|r| Duration::from_secs_f64(1.0 / r))
+    };
+
+    let mut tick_durations: Vec<Duration> = if cfg.profile {
+        Vec::with_capacity(cfg.ticks.max(1) as usize)
+    } else {
+        Vec::new()
+    };
+    let mut world_tick_total = Duration::ZERO;
+    let mut agent_step_total = Duration::ZERO;
+    let mut settlement_total = Duration::ZERO;
+    let loop_start = Instant::now();
 
     let mut last_population_reported = actual;
     let mut last_report_year: u64 = 0;
@@ -109,6 +127,7 @@ pub fn run_simulation(cfg: SimConfig, chronicle: &mut Chronicle) -> SimOutcome {
             chronicle.record(Event::new(tick, line.to_string()));
         }
         world.regen_food(tick);
+        let after_world = Instant::now();
         step_agents(
             &mut agents,
             &mut world,
@@ -117,6 +136,7 @@ pub fn run_simulation(cfg: SimConfig, chronicle: &mut Chronicle) -> SimOutcome {
             chronicle,
             tick,
         );
+        let after_agents = Instant::now();
         update_settlements(
             &mut settlements,
             &mut agents,
@@ -125,6 +145,12 @@ pub fn run_simulation(cfg: SimConfig, chronicle: &mut Chronicle) -> SimOutcome {
             chronicle,
             tick,
         );
+        let after_settlements = Instant::now();
+        if cfg.profile {
+            world_tick_total += after_world - tick_start;
+            agent_step_total += after_agents - after_world;
+            settlement_total += after_settlements - after_agents;
+        }
 
         chronicle.set_header_stats(alive_count(&agents), settlements.alive_count());
 
@@ -156,6 +182,10 @@ pub fn run_simulation(cfg: SimConfig, chronicle: &mut Chronicle) -> SimOutcome {
 
         let _ = chronicle.flush_tick(tick);
 
+        if cfg.profile {
+            tick_durations.push(tick_start.elapsed());
+        }
+
         if alive_count(&agents) == 0 {
             let _ = chronicle.proclaim(&format!(
                 "\nSilence falls. No living soul remains. ({})",
@@ -179,12 +209,79 @@ pub fn run_simulation(cfg: SimConfig, chronicle: &mut Chronicle) -> SimOutcome {
         chronicle::describe_season(tick)
     ));
 
+    if cfg.profile {
+        print_profile_summary(
+            loop_start.elapsed(),
+            &mut tick_durations,
+            world_tick_total,
+            agent_step_total,
+            settlement_total,
+        );
+    }
+
     SimOutcome {
         world,
         agents,
         settlements,
         final_tick: tick,
     }
+}
+
+fn print_profile_summary(
+    total: Duration,
+    tick_durations: &mut [Duration],
+    world_tick_total: Duration,
+    agent_step_total: Duration,
+    settlement_total: Duration,
+) {
+    let n = tick_durations.len();
+    if n == 0 {
+        eprintln!("[profile] no ticks recorded");
+        return;
+    }
+    tick_durations.sort();
+    let sum_per_tick: Duration = tick_durations.iter().sum();
+    let avg = sum_per_tick / n as u32;
+    let p50 = tick_durations[n / 2];
+    let p99_idx = ((n as f64) * 0.99) as usize;
+    let p99 = tick_durations[p99_idx.min(n - 1)];
+    let total_secs = total.as_secs_f64();
+    let tps = if total_secs > 0.0 {
+        n as f64 / total_secs
+    } else {
+        0.0
+    };
+    let phase_pct = |d: Duration| {
+        let s = sum_per_tick.as_secs_f64();
+        if s > 0.0 {
+            d.as_secs_f64() / s * 100.0
+        } else {
+            0.0
+        }
+    };
+    eprintln!("=== profile ===");
+    eprintln!("ticks:          {}", n);
+    eprintln!("total:          {:.3}s", total_secs);
+    eprintln!("ticks/sec:      {:.1}", tps);
+    eprintln!("avg/tick:       {:.3}ms", avg.as_secs_f64() * 1000.0);
+    eprintln!("p50/tick:       {:.3}ms", p50.as_secs_f64() * 1000.0);
+    eprintln!("p99/tick:       {:.3}ms", p99.as_secs_f64() * 1000.0);
+    eprintln!("--- phase totals ---");
+    eprintln!(
+        "world tick:     {:.3}s ({:.1}%)",
+        world_tick_total.as_secs_f64(),
+        phase_pct(world_tick_total)
+    );
+    eprintln!(
+        "agent step:     {:.3}s ({:.1}%)",
+        agent_step_total.as_secs_f64(),
+        phase_pct(agent_step_total)
+    );
+    eprintln!(
+        "settlement upd: {:.3}s ({:.1}%)",
+        settlement_total.as_secs_f64(),
+        phase_pct(settlement_total)
+    );
 }
 
 /// Narrate the notable settlements: the largest, plus a struggling one if any.

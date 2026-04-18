@@ -50,6 +50,11 @@ struct Cli {
     #[arg(long = "no-color", default_value_t = false)]
     no_color: bool,
 
+    /// Collect per-tick timing stats and print a summary on exit.
+    /// Also disables real-time pacing.
+    #[arg(long = "profile", default_value_t = false)]
+    profile: bool,
+
     /// Print help
     #[arg(long = "help", action = clap::ArgAction::Help)]
     help: Option<bool>,
@@ -91,6 +96,7 @@ fn main() {
         agents: cli.agents,
         ticks: cli.ticks,
         tick_rate: Some(cli.rate),
+        profile: cli.profile,
     };
 
     run_simulation(cfg, &mut chronicle);

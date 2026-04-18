@@ -11,6 +11,7 @@ fn settlements_form_when_agents_cluster() {
         agents: 200,
         ticks: 300,
         tick_rate: None,
+        profile: false,
     };
     let outcome = run_simulation(cfg, &mut Chronicle::sink());
     assert!(
@@ -28,6 +29,7 @@ fn settlement_stockpiles_accumulate() {
         agents: 200,
         ticks: 400,
         tick_rate: None,
+        profile: false,
     };
     let outcome = run_simulation(cfg, &mut Chronicle::sink());
     let max_stockpile = outcome
@@ -54,6 +56,7 @@ fn settlements_can_be_abandoned() {
         agents: 120,
         ticks: 1500,
         tick_rate: None,
+        profile: false,
     };
     let outcome = run_simulation(cfg, &mut Chronicle::sink());
     let any_founded = !outcome.settlements.list.is_empty();
@@ -79,6 +82,7 @@ fn settlement_population_matches_agents() {
         agents: 200,
         ticks: 250,
         tick_rate: None,
+        profile: false,
     };
     let outcome = run_simulation(cfg, &mut Chronicle::sink());
     for s in outcome.settlements.list.iter().filter(|s| s.alive) {

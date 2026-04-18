@@ -73,6 +73,7 @@ fn agents_can_starve_on_barren_map() {
         agents: 80,
         ticks: 400,
         tick_rate: None,
+        profile: false,
     };
     let outcome = run_simulation(cfg, &mut Chronicle::sink());
     let dead = outcome.agents.iter().filter(|a| !a.alive).count();
@@ -93,6 +94,7 @@ fn agents_can_reproduce() {
         agents: 200,
         ticks: 300,
         tick_rate: None,
+        profile: false,
     };
     let outcome = run_simulation(cfg, &mut Chronicle::sink());
     // Newborns get IDs >= initial seeded count; if len > initial, births occurred.
@@ -114,6 +116,7 @@ fn agents_die_of_old_age() {
         agents: 100,
         ticks: 4000,
         tick_rate: None,
+        profile: false,
     };
     let outcome = run_simulation(cfg, &mut Chronicle::sink());
     let old_age_deaths = outcome

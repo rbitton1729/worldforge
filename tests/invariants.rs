@@ -13,6 +13,7 @@ fn population_is_never_negative() {
         agents: 50,
         ticks: 200,
         tick_rate: None,
+        profile: false,
     };
     let outcome = run_simulation(cfg, &mut Chronicle::sink());
     let alive = alive_count(&outcome.agents);
@@ -28,6 +29,7 @@ fn same_seed_same_final_population() {
         agents: 100,
         ticks: 250,
         tick_rate: None,
+        profile: false,
     };
     let a = run_simulation(SimConfig { ..base }, &mut Chronicle::sink());
     let b = run_simulation(
@@ -38,6 +40,7 @@ fn same_seed_same_final_population() {
             agents: 100,
             ticks: 250,
             tick_rate: None,
+            profile: false,
         },
         &mut Chronicle::sink(),
     );
@@ -56,6 +59,7 @@ fn simulation_terminates_at_requested_ticks() {
         agents: 100,
         ticks: 50,
         tick_rate: None,
+        profile: false,
     };
     let outcome = run_simulation(cfg, &mut Chronicle::sink());
     assert!(
@@ -75,6 +79,7 @@ fn chronicle_output_is_nonempty() {
         agents: 50,
         ticks: 100,
         tick_rate: None,
+        profile: false,
     };
     let mut chronicle = Chronicle::to_file(path.to_str().unwrap()).unwrap();
     run_simulation(cfg, &mut chronicle);
@@ -97,6 +102,7 @@ fn no_panic_on_tiny_map() {
         agents: 5,
         ticks: 50,
         tick_rate: None,
+        profile: false,
     };
     let _ = run_simulation(cfg, &mut Chronicle::sink());
 }
@@ -110,6 +116,7 @@ fn no_panic_on_zero_agents() {
         agents: 0,
         ticks: 20,
         tick_rate: None,
+        profile: false,
     };
     let outcome = run_simulation(cfg, &mut Chronicle::sink());
     assert_eq!(alive_count(&outcome.agents), 0);
@@ -125,6 +132,7 @@ fn agent_health_and_hunger_bounded() {
         agents: 80,
         ticks: 300,
         tick_rate: None,
+        profile: false,
     };
     let outcome = run_simulation(cfg, &mut Chronicle::sink());
     for a in &outcome.agents {

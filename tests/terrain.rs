@@ -186,6 +186,7 @@ fn simulation_keeps_fertility_bounded() {
         agents: 200,
         ticks: 400,
         tick_rate: None,
+        profile: false,
     };
     let outcome = run_simulation(cfg, &mut Chronicle::sink());
     for t in &outcome.world.tiles {
@@ -217,6 +218,7 @@ fn foraging_depletes_land() {
         agents: 200,
         ticks: 400,
         tick_rate: None,
+        profile: false,
     };
     let outcome = run_simulation(cfg, &mut Chronicle::sink());
     let min_fertile_biome = outcome
