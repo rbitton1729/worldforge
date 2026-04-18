@@ -1037,34 +1037,34 @@ fn route_rank_of_char(ch: char) -> u8 {
     }
 }
 
-/// Zoomed-in renderer: each world tile occupies a 2×2 block of terminal cells.
-/// Settlement marker is drawn in the top-left of its tile block.
+/// Zoomed-in renderer: each world tile occupies 2 terminal columns × 1 terminal
+/// row (using half-block characters for vertical sub-tiles). This preserves the
+/// same aspect-ratio correction as the normal view so tiles stay rectangular.
 fn draw_map_zoomed_in(
     f: &mut Frame,
     inner: Rect,
     world: &World,
     settlements: &Settlements,
-    legend_counts: &HashMap<u32, u32>,
+    _legend_counts: &HashMap<u32, u32>,
     tick: u64,
     ui: &TuiState,
 ) {
-    let tile_w: i32 = 2;
-    let tile_h: i32 = 2;
+    let tile_w: i32 = 2; // terminal columns per tile
     let tiles_cols = (inner.width as i32) / tile_w;
-    let tiles_rows = (inner.height as i32) / tile_h;
+    let tiles_rows = inner.height as i32; // each term row = 2 world rows via ▀
     if tiles_cols <= 0 || tiles_rows <= 0 {
         return;
     }
 
     let left = ui.cam_col - tiles_cols / 2;
-    let top = ui.cam_row - tiles_rows / 2;
+    let top = ui.cam_row - tiles_rows; // each term row covers 2 world rows
 
     // Routes at tile-cell granularity; the dot lands in the tile's top-left
     // sub-cell (mirrors where settlement markers land).
     let mut routes_tile: HashMap<(i32, i32), RouteCell> = HashMap::new();
     plot_routes(&mut routes_tile, settlements, |c, r| {
-        let tc = c - left;
-        let tr = r - top;
+        let tc = (c - left) / tile_w;
+        let tr = (r - top) / 2;
         if tc < 0 || tc >= tiles_cols || tr < 0 || tr >= tiles_rows {
             None
         } else {
@@ -1082,8 +1082,8 @@ fn draw_map_zoomed_in(
     }
     let mut marker_tile: HashMap<(i32, i32), Mk> = HashMap::new();
     for st in &settlements.list {
-        let tc = st.col - left;
-        let tr = st.row - top;
+        let tc = (st.col - left) / tile_w;
+        let tr = (st.row - top) / 2;
         if tc < 0 || tc >= tiles_cols || tr < 0 || tr >= tiles_rows {
             continue;
         }
@@ -1113,52 +1113,58 @@ fn draw_map_zoomed_in(
         );
     }
 
-    let total_rows = (tiles_rows * tile_h) as usize;
-    let total_cols = (tiles_cols * tile_w) as usize;
-    let mut lines: Vec<Line> = Vec::with_capacity(total_rows);
-    for term_row in 0..(tiles_rows * tile_h) {
-        let tile_row = top + term_row / tile_h;
-        let sub_row = term_row % tile_h;
-        let mut spans: Vec<Span> = Vec::with_capacity(total_cols);
+    let mut lines: Vec<Line> = Vec::with_capacity(tiles_rows as usize);
+    for term_row in 0..tiles_rows {
+        let top_map_row = top + term_row * 2;
+        let bot_map_row = top_map_row + 1;
+        let mut spans: Vec<Span> = Vec::with_capacity((tiles_cols * tile_w) as usize);
         for tile_col_off in 0..tiles_cols {
-            let tile_col = left + tile_col_off;
-            let color = tile_color(world, tile_col, tile_row);
-            let tile_key = (tile_col_off, tile_row - top);
-            for sub_col in 0..tile_w {
-                let is_marker_slot = sub_row == 0 && sub_col == 0;
-                if let Some(m) = marker_tile.get(&tile_key) {
-                    if is_marker_slot {
-                        let bg = m.bg_override.unwrap_or(color);
-                        let mut style = Style::default().fg(m.fg).bg(bg);
-                        if m.bold {
-                            style = style.add_modifier(Modifier::BOLD);
-                        }
-                        if m.dim {
-                            style = style.add_modifier(Modifier::DIM);
-                        }
-                        spans.push(Span::styled(String::from(m.ch), style));
-                        continue;
-                    }
-                    // Flash fills the whole tile block when active, so the
-                    // attack is unmistakable even from a distance.
-                    if let Some(flash_bg) = m.bg_override {
-                        spans.push(Span::styled(
-                            " ".to_string(),
-                            Style::default().bg(flash_bg),
-                        ));
-                        continue;
-                    }
+            let tile_col = left + tile_col_off * tile_w;
+            let top_color = tile_color(world, tile_col, top_map_row);
+            let bot_color = tile_color(world, tile_col, bot_map_row);
+            let tile_key = (tile_col_off, term_row);
+            if let Some(m) = marker_tile.get(&tile_key) {
+                let bg = m.bg_override.unwrap_or(bot_color);
+                let mut style = Style::default().fg(m.fg).bg(bg);
+                if m.bold {
+                    style = style.add_modifier(Modifier::BOLD);
                 }
-                if is_marker_slot {
-                    if let Some(rc) = routes_tile.get(&tile_key) {
-                        spans.push(Span::styled(
-                            String::from(rc.ch),
-                            Style::default().fg(rc.fg).bg(color),
-                        ));
-                        continue;
-                    }
+                if m.dim {
+                    style = style.add_modifier(Modifier::DIM);
                 }
-                spans.push(Span::styled(" ".to_string(), Style::default().bg(color)));
+                // Marker in first col of the tile, blank fill in second col
+                spans.push(Span::styled(String::from(m.ch), style));
+                if let Some(flash_bg) = m.bg_override {
+                    spans.push(Span::styled(
+                        " ".to_string(),
+                        Style::default().bg(flash_bg),
+                    ));
+                } else {
+                    spans.push(Span::styled(
+                        "▀".to_string(),
+                        Style::default().fg(top_color).bg(bot_color),
+                    ));
+                }
+                continue;
+            }
+            if let Some(rc) = routes_tile.get(&tile_key) {
+                spans.push(Span::styled(
+                    String::from(rc.ch),
+                    Style::default().fg(rc.fg).bg(top_color),
+                ));
+                spans.push(Span::styled(
+                    "▀".to_string(),
+                    Style::default().fg(top_color).bg(bot_color),
+                ));
+            } else {
+                spans.push(Span::styled(
+                    "▀".to_string(),
+                    Style::default().fg(top_color).bg(bot_color),
+                ));
+                spans.push(Span::styled(
+                    "▀".to_string(),
+                    Style::default().fg(top_color).bg(bot_color),
+                ));
             }
         }
         lines.push(Line::from(spans));
