@@ -15,7 +15,7 @@ Settlements form, trade, raid each other, develop traits. The chronicle narrates
 ## v0.3.0 — Culture
 - [x] Great individuals — agents that do exceptional things get named and remembered
   (epithets like "the Conqueror", "the Wanderer" based on deeds: raiding, trading, surviving)
-- [ ] Customs emerge — settlements develop traditions from behavior patterns
+- [x] Customs emerge — settlements develop traditions from behavior patterns
   ("The people of Thornhold feast at harvest", "Velmara sends its youth on a year's journey")
 - [ ] Languages — settlements that are far apart develop different name generators
 - [ ] Religion — emerges from attempts to explain famine/abundance
