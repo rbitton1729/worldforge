@@ -104,14 +104,14 @@ fn agents_can_reproduce() {
 
 #[test]
 fn agents_die_of_old_age() {
-    // Agents start staggered up to ~300 ticks old and live 600-900; long enough run
-    // guarantees some natural deaths.
+    // Agents start staggered up to ~1500 ticks old and live 3000-5000; long enough
+    // run guarantees some natural deaths.
     let cfg = SimConfig {
         seed: 77,
         width: 80,
         height: 40,
         agents: 100,
-        ticks: 700,
+        ticks: 4000,
         chronicle_path: None,
     };
     let outcome = run_simulation(cfg);

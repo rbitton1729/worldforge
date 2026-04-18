@@ -37,23 +37,23 @@ pub const HUNGER_STARVE_THRESHOLD: f32 = 70.0;
 /// Hunger at 100 means the agent starts taking health damage.
 pub const HUNGER_MAX: f32 = 100.0;
 /// Hunger increase per tick.
-const HUNGER_PER_TICK: f32 = 1.4;
+const HUNGER_PER_TICK: f32 = 1.0;
 /// Health damage per tick while fully starving.
-const STARVE_DAMAGE: f32 = 3.0;
+const STARVE_DAMAGE: f32 = 2.0;
 
 /// Agents well-fed below this hunger value can reproduce.
 const REPRO_HUNGER_MAX: f32 = 28.0;
 /// Minimum age before reproduction.
-const REPRO_MIN_AGE: u32 = 60;
+const REPRO_MIN_AGE: u32 = 400;
 /// Per-tick probability of reproducing when conditions are met.
-const REPRO_CHANCE: f64 = 0.010;
+const REPRO_CHANCE: f64 = 0.025;
 /// Radius within which another agent counts as a neighbor for reproduction.
 const REPRO_RADIUS: i32 = 1;
 
 /// Baseline lifespan in ticks (100 ticks = 1 year).
-const LIFESPAN_BASE: u32 = 600;
+const LIFESPAN_BASE: u32 = 3000;
 /// Random extra lifespan applied per agent.
-const LIFESPAN_VARIANCE: u32 = 300;
+const LIFESPAN_VARIANCE: u32 = 2000;
 /// Food eaten per bite (per tick on a food-bearing tile).
 const BITE_SIZE: f32 = 2.0;
 /// How much hunger one unit of food restores.

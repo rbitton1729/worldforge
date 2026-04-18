@@ -23,11 +23,11 @@ impl Biome {
     /// Base food regenerated per tick per tile (scaled small).
     pub fn food_regen(self) -> f32 {
         match self {
-            Biome::Plains => 0.012,
-            Biome::Forest => 0.020,
-            Biome::Coast => 0.015,
-            Biome::Hills => 0.007,
-            Biome::Tundra => 0.002,
+            Biome::Plains => 0.020,
+            Biome::Forest => 0.030,
+            Biome::Coast => 0.022,
+            Biome::Hills => 0.010,
+            Biome::Tundra => 0.003,
             Biome::Desert => 0.001,
             Biome::Mountains => 0.0,
             Biome::Ocean => 0.0,
@@ -37,10 +37,10 @@ impl Biome {
     /// Max food the tile can hold.
     pub fn food_cap(self) -> f32 {
         match self {
-            Biome::Plains => 6.0,
-            Biome::Forest => 10.0,
-            Biome::Coast => 7.0,
-            Biome::Hills => 3.0,
+            Biome::Plains => 9.0,
+            Biome::Forest => 15.0,
+            Biome::Coast => 9.0,
+            Biome::Hills => 4.0,
             Biome::Tundra => 1.5,
             Biome::Desert => 0.5,
             Biome::Mountains => 0.0,
@@ -255,11 +255,13 @@ impl World {
             if regen > 0.0 && tile.food < cap {
                 tile.food = (tile.food + regen).min(cap);
             }
-            // Fertility only heals on well-stocked tiles — heavily foraged land
-            // stays barren until agents move on and the plot regrows.
+            // Fertility slowly heals even on foraged tiles, with a bonus when
+            // the plot is well-stocked (so ungrazed land recovers fastest).
             let natural = tile.biome.natural_fertility();
-            if fert < natural && cap > 0.0 && tile.food >= cap * 0.7 {
-                tile.fertility = (fert + FERTILITY_RECOVERY * factor).min(natural);
+            if fert < natural && cap > 0.0 {
+                let heal_mul = if tile.food >= cap * 0.7 { 1.0 } else { 0.3 };
+                tile.fertility =
+                    (fert + FERTILITY_RECOVERY * factor * heal_mul).min(natural);
             }
         }
     }
@@ -346,7 +348,7 @@ pub fn season_regen_factor(tick: u64) -> f32 {
         0 => 1.3, // Spring
         1 => 1.6, // Summer
         2 => 0.5, // Autumn
-        _ => 0.05, // Winter
+        _ => 0.2, // Winter
     }
 }
 
