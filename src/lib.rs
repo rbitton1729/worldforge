@@ -10,7 +10,7 @@ use agent::{alive_count, seed_agents, step_agents, Agent};
 use chronicle::{Chronicle, Event};
 use rand_chacha::ChaCha8Rng;
 use rand::SeedableRng;
-use settlement::{update_settlements, Settlements};
+use settlement::{update_settlements, Dialects, Settlements};
 use std::time::{Duration, Instant};
 use world::{Biome, World};
 
@@ -87,6 +87,7 @@ pub fn run_simulation(cfg: SimConfig, chronicle: &mut Chronicle) -> SimOutcome {
     }
 
     let mut settlements = Settlements::new();
+    settlements.set_dialects(Dialects::generate(&world, cfg.seed));
 
     chronicle.record(Event::new(
         0,

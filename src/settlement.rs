@@ -2,6 +2,7 @@ use crate::agent::{Agent, MERCHANT_CARGO, MERCHANT_DISPATCH_THRESHOLD, MERCHANT_
 use crate::chronicle::{Chronicle, Event, TICKS_PER_YEAR};
 use crate::world::{Biome, World};
 use rand::Rng;
+use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use std::collections::HashMap;
 
@@ -131,6 +132,10 @@ pub struct Settlement {
     pub autumn_overflows: u32,
     /// Cultural traditions that have emerged from this settlement's behavior.
     pub customs: Vec<Custom>,
+    /// Index into [`Dialects::centers`] for the language this settlement was
+    /// named in. `None` when the world was generated without any centers
+    /// (tiny maps, or [`Settlements::new`] used directly in tests).
+    pub dialect_id: Option<u32>,
 }
 
 /// Signals emitted when a trade trip is recorded.
@@ -269,6 +274,7 @@ impl Settlement {
 pub struct Settlements {
     pub list: Vec<Settlement>,
     next_id: u32,
+    pub dialects: Dialects,
 }
 
 impl Settlements {
@@ -276,7 +282,14 @@ impl Settlements {
         Self {
             list: Vec::new(),
             next_id: 0,
+            dialects: Dialects::empty(),
         }
+    }
+
+    /// Replace this settlement book's dialects. Called once at sim startup,
+    /// after the world is generated but before any settlement is founded.
+    pub fn set_dialects(&mut self, dialects: Dialects) {
+        self.dialects = dialects;
     }
 
     pub fn alive_count(&self) -> usize {
@@ -290,10 +303,14 @@ impl Settlements {
             .any(|s| world.hex_distance((s.col, s.row), (col, row)) < MIN_SEPARATION)
     }
 
-    fn found(&mut self, col: i32, row: i32, tick: u64, rng: &mut ChaCha8Rng) -> u32 {
+    fn found(&mut self, col: i32, row: i32, tick: u64, world: &World, rng: &mut ChaCha8Rng) -> u32 {
         let id = self.next_id;
         self.next_id += 1;
-        let name = generate_name(rng);
+        let dialect_idx = self.dialects.nearest(world, col, row);
+        let name = match dialect_idx {
+            Some(i) => generate_name(rng, Some(&self.dialects.centers[i].dialect)),
+            None => generate_name(rng, None),
+        };
         self.list.push(Settlement {
             id,
             name,
@@ -317,6 +334,7 @@ impl Settlements {
             last_land_event_year: None,
             autumn_overflows: 0,
             customs: Vec::new(),
+            dialect_id: dialect_idx.map(|i| i as u32),
         });
         id
     }
@@ -388,7 +406,7 @@ pub fn update_settlements(
             .map(|s| (s.name.clone(), world.hex_distance((s.col, s.row), (ac, ar))))
             .min_by_key(|(_, d)| *d);
 
-        let id = settlements.found(ac, ar, tick, rng);
+        let id = settlements.found(ac, ar, tick, world, rng);
         for &j in &neighbors {
             agents[j].settlement = Some(id);
             agents[j].deeds.founded_settlement = true;
@@ -1427,16 +1445,236 @@ fn custom_emergence_line(settlement_name: &str, kind: CustomKind, custom_name: &
     )
 }
 
-fn generate_name(rng: &mut ChaCha8Rng) -> String {
-    const PREFIX: &[&str] = &[
-        "Thorn", "Dusk", "Vel", "Ash", "El", "Ver", "Bryn", "Mor", "Kel", "Dun", "Hal", "Sten",
-        "Wyn", "Gale", "Fro", "Cal", "Rav", "Iron", "Oak", "Stone", "Mar", "Fen",
-    ];
-    const SUFFIX: &[&str] = &[
-        "hold", "moor", "fall", "mara", "ford", "reach", "mere", "wick", "wold", "stead", "gate",
-        "haven", "crag", "vale", "burn", "stow",
-    ];
-    let p = PREFIX[rng.gen_range(0..PREFIX.len())];
-    let s = SUFFIX[rng.gen_range(0..SUFFIX.len())];
+/// Master pool of name prefixes. Each dialect draws a random subset from this
+/// list, and when no dialect is available the full pool acts as the global
+/// fallback.
+const MASTER_PREFIXES: &[&str] = &[
+    "Thorn", "Dusk", "Vel", "Ash", "El", "Ver", "Bryn", "Mor", "Kel", "Dun", "Hal", "Sten", "Wyn",
+    "Gale", "Fro", "Cal", "Rav", "Iron", "Oak", "Stone", "Mar", "Fen", "Cor", "Drav", "Lyn", "Myr",
+    "Nor", "Pen", "Ryn", "Shad", "Sil", "Tal", "Tor", "Ur", "Vane", "Wyr", "Yth", "Zar", "Brim",
+    "Aln",
+];
+/// Master pool of name suffixes — paired with prefixes to compose settlement names.
+const MASTER_SUFFIXES: &[&str] = &[
+    "hold", "moor", "fall", "mara", "ford", "reach", "mere", "wick", "wold", "stead", "gate",
+    "haven", "crag", "vale", "burn", "stow", "keep", "march", "dale", "ridge", "thorpe", "rock",
+    "cove", "hollow", "shire", "wood", "glen", "spire", "bay", "barrow",
+];
+
+/// How many language centers to seed per world — a few regions with distinct
+/// tongues yields clear linguistic boundaries without shattering the map into
+/// unreadable pockets.
+const DIALECT_CENTER_MIN: usize = 3;
+const DIALECT_CENTER_MAX: usize = 6;
+/// Each dialect draws this many prefixes / suffixes from the master pool.
+/// A narrow-enough slice keeps names within a region feeling cohesive.
+const DIALECT_PREFIX_MIN: usize = 8;
+const DIALECT_PREFIX_MAX: usize = 12;
+const DIALECT_SUFFIX_MIN: usize = 5;
+const DIALECT_SUFFIX_MAX: usize = 8;
+
+/// A per-region naming vocabulary. Two settlements sharing the same dialect
+/// will sound like they came from the same people; two settlements with
+/// different dialects won't.
+#[derive(Debug, Clone)]
+pub struct Dialect {
+    pub prefixes: Vec<&'static str>,
+    pub suffixes: Vec<&'static str>,
+}
+
+impl Dialect {
+    fn from_master(rng: &mut ChaCha8Rng) -> Self {
+        let pref_count = rng.gen_range(DIALECT_PREFIX_MIN..=DIALECT_PREFIX_MAX);
+        let suf_count = rng.gen_range(DIALECT_SUFFIX_MIN..=DIALECT_SUFFIX_MAX);
+        Self {
+            prefixes: sample_pool(MASTER_PREFIXES, pref_count, rng),
+            suffixes: sample_pool(MASTER_SUFFIXES, suf_count, rng),
+        }
+    }
+}
+
+/// A point on the map anchoring a [`Dialect`]. Settlements founded closest to
+/// this center inherit its naming pool.
+#[derive(Debug, Clone)]
+pub struct LanguageCenter {
+    pub col: i32,
+    pub row: i32,
+    pub dialect: Dialect,
+}
+
+/// The full set of language centers for a world. Centers are scattered at
+/// world-gen time; the nearest one to a new settlement decides its dialect.
+#[derive(Debug, Clone)]
+pub struct Dialects {
+    pub centers: Vec<LanguageCenter>,
+}
+
+impl Dialects {
+    pub fn empty() -> Self {
+        Self { centers: Vec::new() }
+    }
+
+    /// Scatter 3–6 language centers across the world's land tiles with a
+    /// rough minimum separation so each center commands a meaningful region.
+    /// Runs on a seeded RNG derived from the world's seed so dialects are
+    /// deterministic without perturbing the main simulation RNG stream.
+    pub fn generate(world: &World, seed: u64) -> Self {
+        let mut rng = ChaCha8Rng::seed_from_u64(seed ^ 0xD1A1_EC75_EED_u64);
+        let min_sep = ((world.width.min(world.height) as i32) / 3).max(5);
+        let target = rng.gen_range(DIALECT_CENTER_MIN..=DIALECT_CENTER_MAX);
+        let mut centers: Vec<LanguageCenter> = Vec::new();
+        for _ in 0..500 {
+            if centers.len() >= target {
+                break;
+            }
+            let col = rng.gen_range(0..world.width as i32);
+            let row = rng.gen_range(0..world.height as i32);
+            if !world.is_land(col, row) {
+                continue;
+            }
+            if centers
+                .iter()
+                .any(|c| world.hex_distance((c.col, c.row), (col, row)) < min_sep)
+            {
+                continue;
+            }
+            let dialect = Dialect::from_master(&mut rng);
+            centers.push(LanguageCenter { col, row, dialect });
+        }
+        Self { centers }
+    }
+
+    /// Index of the language center nearest to (col, row), or `None` if the
+    /// world has no centers (e.g. built via [`Self::empty`]).
+    pub fn nearest(&self, world: &World, col: i32, row: i32) -> Option<usize> {
+        self.centers
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (i, world.hex_distance((c.col, c.row), (col, row))))
+            .min_by_key(|(_, d)| *d)
+            .map(|(i, _)| i)
+    }
+}
+
+/// Partial Fisher–Yates: pick `n` distinct entries from `pool` without
+/// mutating it, consuming rng deterministically.
+fn sample_pool(pool: &[&'static str], n: usize, rng: &mut ChaCha8Rng) -> Vec<&'static str> {
+    let n = n.min(pool.len());
+    let mut indices: Vec<usize> = (0..pool.len()).collect();
+    for i in 0..n {
+        let j = rng.gen_range(i..pool.len());
+        indices.swap(i, j);
+    }
+    indices.into_iter().take(n).map(|i| pool[i]).collect()
+}
+
+/// Produce a settlement name. If `dialect` is provided its pools are used;
+/// otherwise the full master pool acts as a fallback so code paths that
+/// haven't wired up dialects still get sensible names.
+fn generate_name(rng: &mut ChaCha8Rng, dialect: Option<&Dialect>) -> String {
+    let (prefixes, suffixes): (&[&str], &[&str]) = match dialect {
+        Some(d) if !d.prefixes.is_empty() && !d.suffixes.is_empty() => {
+            (d.prefixes.as_slice(), d.suffixes.as_slice())
+        }
+        _ => (MASTER_PREFIXES, MASTER_SUFFIXES),
+    };
+    let p = prefixes[rng.gen_range(0..prefixes.len())];
+    let s = suffixes[rng.gen_range(0..suffixes.len())];
     format!("{}{}", p, s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::world::World;
+
+    #[test]
+    fn dialects_generate_populates_centers_on_a_normal_map() {
+        let world = World::generate(80, 40, 2024);
+        let dialects = Dialects::generate(&world, 2024);
+        assert!(
+            dialects.centers.len() >= DIALECT_CENTER_MIN,
+            "expected at least {} centers, got {}",
+            DIALECT_CENTER_MIN,
+            dialects.centers.len()
+        );
+        for c in &dialects.centers {
+            assert!(world.is_land(c.col, c.row), "center must sit on land");
+            assert!(!c.dialect.prefixes.is_empty());
+            assert!(!c.dialect.suffixes.is_empty());
+        }
+    }
+
+    #[test]
+    fn dialect_generation_is_deterministic_for_seed() {
+        let world = World::generate(80, 40, 2024);
+        let a = Dialects::generate(&world, 2024);
+        let b = Dialects::generate(&world, 2024);
+        assert_eq!(a.centers.len(), b.centers.len());
+        for (ca, cb) in a.centers.iter().zip(b.centers.iter()) {
+            assert_eq!((ca.col, ca.row), (cb.col, cb.row));
+            assert_eq!(ca.dialect.prefixes, cb.dialect.prefixes);
+            assert_eq!(ca.dialect.suffixes, cb.dialect.suffixes);
+        }
+    }
+
+    #[test]
+    fn distant_settlements_pick_different_dialects() {
+        // Hand-built dialects pinned at opposite corners of the map so the
+        // nearest-center lookup is unambiguous.
+        let world = World::generate(80, 40, 42);
+        let centers = vec![
+            LanguageCenter {
+                col: 5,
+                row: 5,
+                dialect: Dialect {
+                    prefixes: vec!["Aa", "Bb"],
+                    suffixes: vec!["x", "y"],
+                },
+            },
+            LanguageCenter {
+                col: 70,
+                row: 35,
+                dialect: Dialect {
+                    prefixes: vec!["Cc", "Dd"],
+                    suffixes: vec!["q", "r"],
+                },
+            },
+        ];
+        let dialects = Dialects { centers };
+        let near_first = dialects.nearest(&world, 6, 6).unwrap();
+        let near_second = dialects.nearest(&world, 69, 34).unwrap();
+        assert_eq!(near_first, 0);
+        assert_eq!(near_second, 1);
+        assert_ne!(near_first, near_second);
+    }
+
+    #[test]
+    fn generate_name_falls_back_to_master_pool_when_no_dialect() {
+        let mut rng = ChaCha8Rng::seed_from_u64(1);
+        let name = generate_name(&mut rng, None);
+        assert!(
+            MASTER_PREFIXES.iter().any(|p| name.starts_with(p)),
+            "name {:?} should start with a master prefix",
+            name
+        );
+        assert!(
+            MASTER_SUFFIXES.iter().any(|s| name.ends_with(s)),
+            "name {:?} should end with a master suffix",
+            name
+        );
+    }
+
+    #[test]
+    fn generate_name_uses_dialect_pools_when_provided() {
+        let dialect = Dialect {
+            prefixes: vec!["Zy"],
+            suffixes: vec!["zog"],
+        };
+        let mut rng = ChaCha8Rng::seed_from_u64(1);
+        for _ in 0..10 {
+            let name = generate_name(&mut rng, Some(&dialect));
+            assert_eq!(name, "Zyzog");
+        }
+    }
 }

@@ -4,7 +4,7 @@
 
 use crate::agent::{alive_count, seed_agents, step_agents, Agent};
 use crate::chronicle::{Chronicle, Event, TICKS_PER_YEAR};
-use crate::settlement::{update_settlements, Settlement, Settlements, Trait};
+use crate::settlement::{update_settlements, Dialects, Settlement, Settlements, Trait};
 use crate::world::{Biome, World};
 use crate::{SimConfig, SimOutcome};
 
@@ -137,6 +137,7 @@ fn run_inner(
     let mut world = World::generate(cfg.width, cfg.height, cfg.seed);
     let mut agents: Vec<Agent> = seed_agents(&world, cfg.agents, &mut rng);
     let mut settlements = Settlements::new();
+    settlements.set_dialects(Dialects::generate(&world, cfg.seed));
     chronicle.record(Event::new(
         0,
         "The world awakens. Scattered bands wander the land in search of food.".to_string(),
@@ -726,7 +727,8 @@ fn world_to_term(
     row: i32,
     start_col: i32,
     start_row: i32,
-    scale: i32,
+    scale_x: i32,
+    scale_y: i32,
     cols: i32,
     rows: i32,
 ) -> Option<(i32, i32)> {
@@ -735,8 +737,8 @@ fn world_to_term(
     if dc < 0 || dr < 0 {
         return None;
     }
-    let tc = dc / scale;
-    let tr = (dr / scale) / 2;
+    let tc = dc / scale_x;
+    let tr = (dr / scale_y) / 2;
     if tc < 0 || tc >= cols || tr < 0 || tr >= rows {
         return None;
     }
@@ -780,7 +782,7 @@ fn draw_map_halfblock(
     plot_routes(
         &mut routes,
         settlements,
-        |c, r| world_to_term(c, r, start_col, start_row, s, cols, rows),
+        |c, r| world_to_term(c, r, start_col, start_row, s, s, cols, rows),
     );
 
     // -- settlement markers (live + ruins), indexed by (term_col, term_row).
@@ -788,7 +790,7 @@ fn draw_map_halfblock(
     // (loses the other half's biome) so the marker is actually legible.
     let mut markers: HashMap<(i32, i32), Marker> = HashMap::new();
     for st in &settlements.list {
-        let Some((tc, tr)) = world_to_term(st.col, st.row, start_col, start_row, s, cols, rows)
+        let Some((tc, tr)) = world_to_term(st.col, st.row, start_col, start_row, s, s, cols, rows)
         else {
             continue;
         };
