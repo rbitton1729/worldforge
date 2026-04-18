@@ -22,6 +22,10 @@ const RAID_CHANCE: f64 = 0.050;
 const RAID_FAMINE_MULT: f64 = 2.5;
 /// Raids accumulated before a blood feud is declared.
 const BLOOD_FEUD_THRESHOLD: u32 = 2;
+/// A settlement can't be a raider until it has existed for this many ticks.
+/// Prevents fresh clusters from immediately warring once a handful of their
+/// founders happen to be veterans.
+const RAID_MIN_SETTLEMENT_AGE_TICKS: u64 = 2 * TICKS_PER_YEAR;
 
 /// Minimum loyal / nearby agents required to found a settlement.
 const FOUND_THRESHOLD: usize = 5;
@@ -627,19 +631,27 @@ fn resolve_raid_outcome(
     }
 }
 
-/// Reward all surviving warriors of `sid` with combat experience after a
-/// raid, and emit a one-per-year chronicle line for any who just crossed
-/// into "seasoned warrior" territory.
+/// Reward survivors of `sid` with combat experience after a raid, and emit a
+/// one-per-year chronicle line for any who just crossed into "seasoned
+/// warrior" territory. When `warriors_only` is true, only agents already past
+/// the warrior threshold learn — that's correct for attackers (only warriors
+/// rode out). When false, every living settlement member gains skill — used
+/// for defenders, because being raided is itself a combat lesson and is how
+/// non-warriors first rise above [`WARRIOR_RECOGNITION_THRESHOLD`].
 fn grant_combat_experience(
     agents: &mut [Agent],
     sid: u32,
+    warriors_only: bool,
     chronicle: &mut Chronicle,
     tick: u64,
 ) {
     use crate::agent::{FIGHTING_GROWTH, ROLE_RECOGNITION_THRESHOLD};
     let year = tick / crate::chronicle::TICKS_PER_YEAR;
     for a in agents.iter_mut() {
-        if !a.alive || a.settlement != Some(sid) || !a.is_warrior() {
+        if !a.alive || a.settlement != Some(sid) {
+            continue;
+        }
+        if warriors_only && !a.is_warrior() {
             continue;
         }
         let before = a.skills.fighting;
@@ -667,10 +679,17 @@ fn raid_phase(
     tick: u64,
 ) {
     // Snapshot candidate raiders to avoid borrow issues during resolution.
+    // New settlements can't raid — a lowered warrior threshold means raw
+    // clusters would otherwise war immediately if a few founders happened to
+    // seed high on fighting.
     let candidates: Vec<(u32, i32, i32, f32)> = settlements
         .list
         .iter()
-        .filter(|s| s.alive && s.stockpile < RAID_HUNGER_STOCK)
+        .filter(|s| {
+            s.alive
+                && s.stockpile < RAID_HUNGER_STOCK
+                && tick.saturating_sub(s.founded_tick) >= RAID_MIN_SETTLEMENT_AGE_TICKS
+        })
         .map(|s| (s.id, s.col, s.row, s.stockpile))
         .collect();
 
@@ -931,11 +950,14 @@ fn raid_phase(
         }
 
         // Combat experience: every surviving warrior who took the field
-        // sharpens their skill, including allied defenders who answered the call.
-        grant_combat_experience(agents, raider_id, chronicle, tick);
-        grant_combat_experience(agents, target_id, chronicle, tick);
+        // sharpens their skill, including allied defenders who answered the
+        // call. Defenders of the target also include non-warriors — the
+        // raid was at their doorstep, so civilians learn to fight too, and
+        // this is the hook that bootstraps new warriors.
+        grant_combat_experience(agents, raider_id, true, chronicle, tick);
+        grant_combat_experience(agents, target_id, false, chronicle, tick);
         for &aid in &target_allies {
-            grant_combat_experience(agents, aid, chronicle, tick);
+            grant_combat_experience(agents, aid, true, chronicle, tick);
         }
 
         // Trait emergence after any raid outcome.

@@ -23,14 +23,25 @@ pub const SKILL_DECAY: f32 = 0.0001;
 pub const FORAGING_GROWTH: f32 = 0.01;
 /// Skill granted to a warrior who participated in a raid (any side).
 pub const FIGHTING_GROWTH: f32 = 0.03;
+/// Skill granted each tick a warrior spends patrolling near home — training
+/// without combat. Small but compounding; covers decay and lets a founder
+/// warrior retain their skill in eras without raids.
+pub const FIGHTING_PRACTICE_GROWTH: f32 = 0.005;
 /// Skill granted to a merchant who completed a delivery.
 pub const TRADING_GROWTH: f32 = 0.02;
-/// Skill at or above which an agent is recognized as a warrior or merchant.
+/// Skill at or above which an agent is recognized as a seasoned warrior or
+/// trusted merchant — the milestone emitted in the chronicle.
 pub const ROLE_RECOGNITION_THRESHOLD: f32 = 0.5;
+/// Fighting skill above which an agent is treated as a warrior by settlement
+/// bookkeeping (mustered for raids, patrols near home). Set below the founder
+/// skill-bias ceiling so a fraction of the seeded population are warriors from
+/// day one — otherwise `is_warrior` gates raids which grow fighting skill,
+/// producing a chicken-and-egg deadlock where no raid ever happens.
+pub const WARRIOR_RECOGNITION_THRESHOLD: f32 = 0.3;
 /// Minimum trading skill required for a settlement to dispatch this agent
 /// as a merchant. Below this, settlements lack a skilled enough trader and
 /// no trade trip is initiated.
-pub const MERCHANT_DISPATCH_THRESHOLD: f32 = 0.3;
+pub const MERCHANT_DISPATCH_THRESHOLD: f32 = 0.2;
 
 /// Hunger above this → starving, agents prioritize food.
 pub const HUNGER_STARVE_THRESHOLD: f32 = 70.0;
@@ -131,7 +142,7 @@ impl Agent {
 
     /// Recognized as a warrior once their fighting skill clears the threshold.
     pub fn is_warrior(&self) -> bool {
-        self.skills.fighting > ROLE_RECOGNITION_THRESHOLD
+        self.skills.fighting > WARRIOR_RECOGNITION_THRESHOLD
     }
 
     /// Recognized as a merchant once their trading skill clears the threshold.
@@ -275,6 +286,17 @@ pub fn step_agents(
                     None => wander(world, agent.col, agent.row, rng),
                 };
                 move_agent_to(world, agent, next);
+
+                // Warriors with a home train between raids. Without this,
+                // SKILL_DECAY erodes a founder warrior below the recognition
+                // threshold in an era without fighting, and the deadlock
+                // returns — no warriors → no raids → no fighting skill.
+                if agent.is_warrior() && home.is_some() {
+                    if grow_skill(&mut agent.skills.fighting, FIGHTING_PRACTICE_GROWTH) {
+                        let line = format!("{} has become a seasoned warrior.", agent.name);
+                        record_skill_milestone(agent, chronicle, tick, line);
+                    }
+                }
             }
 
             // Settled foragers gather surplus for the stockpile.
@@ -668,6 +690,14 @@ pub fn alive_count(agents: &[Agent]) -> usize {
 /// — so the population isn't deadlocked on the merchant dispatch threshold.
 pub const SEED_SKILL_BIAS_MAX: f32 = 0.3;
 
+/// Fighting bias range for founders specifically — modeled as veterans and
+/// militia settling the land. Wider and shifted up from `SEED_SKILL_BIAS_MAX`
+/// so a meaningful fraction of the founding generation exceeds
+/// [`WARRIOR_RECOGNITION_THRESHOLD`] on day one. Without that, raids never
+/// fire (chicken-and-egg with fighting-skill growth).
+pub const SEED_FIGHTING_BIAS_MIN: f32 = 0.2;
+pub const SEED_FIGHTING_BIAS_MAX: f32 = 0.5;
+
 /// Seed `n` agents randomly on passable, food-bearing tiles.
 ///
 /// Founders start at the [`SKILL_BASELINE`] for every skill, plus a small
@@ -690,7 +720,8 @@ pub fn seed_agents(world: &World, n: u32, rng: &mut ChaCha8Rng) -> Vec<Agent> {
                 // Stagger starting ages so the founding generation doesn't all die at once.
                 let mut agent = Agent::new(placed, pick_name(rng), col, row, roll_lifespan(rng));
                 agent.age = rng.gen_range(0..LIFESPAN_BASE / 2);
-                agent.skills.fighting += rng.gen_range(0.0..SEED_SKILL_BIAS_MAX);
+                agent.skills.fighting +=
+                    rng.gen_range(SEED_FIGHTING_BIAS_MIN..=SEED_FIGHTING_BIAS_MAX);
                 agent.skills.foraging += rng.gen_range(0.0..SEED_SKILL_BIAS_MAX);
                 agent.skills.trading += rng.gen_range(0.0..SEED_SKILL_BIAS_MAX);
                 out.push(agent);

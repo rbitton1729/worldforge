@@ -2,8 +2,9 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use worldforge::agent::{
     seed_agents, step_agents, Agent, FORAGING_GROWTH, MERCHANT_DISPATCH_THRESHOLD,
-    ROLE_RECOGNITION_THRESHOLD, SEED_SKILL_BIAS_MAX, SKILL_BASELINE, SKILL_DECAY,
-    TRADING_GROWTH,
+    ROLE_RECOGNITION_THRESHOLD, SEED_FIGHTING_BIAS_MAX, SEED_FIGHTING_BIAS_MIN,
+    SEED_SKILL_BIAS_MAX, SKILL_BASELINE, SKILL_DECAY, TRADING_GROWTH,
+    WARRIOR_RECOGNITION_THRESHOLD,
 };
 use worldforge::chronicle::Chronicle;
 use worldforge::settlement::{update_settlements, Settlements};
@@ -34,19 +35,30 @@ fn seeded_agents_have_skills_in_bias_band() {
     let w = World::generate(60, 30, 7);
     let mut rng = ChaCha8Rng::seed_from_u64(7);
     let agents = seed_agents(&w, 200, &mut rng);
-    let upper = SKILL_BASELINE + SEED_SKILL_BIAS_MAX;
+    let upper_generic = SKILL_BASELINE + SEED_SKILL_BIAS_MAX;
+    let fighting_lower = SKILL_BASELINE + SEED_FIGHTING_BIAS_MIN;
+    let fighting_upper = SKILL_BASELINE + SEED_FIGHTING_BIAS_MAX;
     for a in &agents {
-        for v in [a.skills.fighting, a.skills.foraging, a.skills.trading] {
+        assert!(
+            (fighting_lower - 1e-6..=fighting_upper + 1e-6).contains(&a.skills.fighting),
+            "seed fighting {} out of [{}, {}]",
+            a.skills.fighting,
+            fighting_lower,
+            fighting_upper
+        );
+        for v in [a.skills.foraging, a.skills.trading] {
             assert!(
-                (SKILL_BASELINE..=upper + 1e-6).contains(&v),
+                (SKILL_BASELINE..=upper_generic + 1e-6).contains(&v),
                 "seed skill {} out of [{}, {}]",
                 v,
                 SKILL_BASELINE,
-                upper
+                upper_generic
             );
         }
-        // Founders haven't yet earned any role — bias is below recognition.
-        assert!(!a.is_warrior());
+        // Founders are below merchant recognition at seed. Warrior recognition
+        // sits at 0.3 deliberately — the founder fighting bias straddles it so
+        // a meaningful fraction of seeds are warriors from day one, which is
+        // what bootstraps raids (and thus further fighting-skill growth).
         assert!(!a.is_merchant());
     }
     // At least some founders should cross the dispatch threshold so trade can
@@ -77,7 +89,7 @@ fn no_coin_flip_roles_for_newborns_in_long_run() {
     for a in &outcome.agents {
         if a.is_warrior() {
             assert!(
-                a.skills.fighting > ROLE_RECOGNITION_THRESHOLD,
+                a.skills.fighting > WARRIOR_RECOGNITION_THRESHOLD,
                 "warrior {} has fighting skill {} ≤ threshold",
                 a.name,
                 a.skills.fighting
