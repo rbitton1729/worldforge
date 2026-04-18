@@ -1,6 +1,6 @@
 use crate::agent::{Agent, MERCHANT_CARGO, MERCHANT_DISPATCH_THRESHOLD, MERCHANT_LOAD_MIN};
 use crate::chronicle::{Chronicle, Event, TICKS_PER_YEAR};
-use crate::world::World;
+use crate::world::{Biome, World};
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use std::collections::HashMap;
@@ -59,6 +59,49 @@ pub enum Trait {
 const TRAIT_RAIDS_THRESHOLD: u32 = 3;
 const TRAIT_TRADES_THRESHOLD: u32 = 8;
 
+/// Per-tick probability that any single eligible custom emerges for a
+/// settlement. ~1% keeps emergence occasional and gives multiple candidates
+/// time to compete — a settlement with two eligible customs averages one per
+/// hundred ticks, roughly a year.
+const CUSTOM_CHANCE_PER_TICK: f64 = 0.010;
+/// Minimum settlement age before any custom can emerge — a tradition needs
+/// enough lived years behind it to feel earned.
+const CUSTOM_MIN_AGE_TICKS: u64 = 2 * TICKS_PER_YEAR;
+const CUSTOM_HARVEST_OVERFLOWS: u32 = 2;
+const CUSTOM_WARRIOR_RAIDS: u32 = 3;
+const CUSTOM_MEMORIAL_SUFFERED: u32 = 2;
+const CUSTOM_MERCHANT_TRADES: u32 = 8;
+/// Hexes within which a mountain tile counts as "nearby" for pilgrimage.
+const CUSTOM_MOUNTAIN_RADIUS: i32 = 3;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomKind {
+    HarvestFeast,
+    WarriorRite,
+    MemorialVigil,
+    MerchantFair,
+    RiverBlessing,
+    MountainPilgrimage,
+}
+
+const ALL_CUSTOM_KINDS: [CustomKind; 6] = [
+    CustomKind::HarvestFeast,
+    CustomKind::WarriorRite,
+    CustomKind::MemorialVigil,
+    CustomKind::MerchantFair,
+    CustomKind::RiverBlessing,
+    CustomKind::MountainPilgrimage,
+];
+
+/// A cultural tradition a settlement has grown into over time. Each settlement
+/// may develop several customs, at most one of each [`CustomKind`].
+#[derive(Debug, Clone)]
+pub struct Custom {
+    pub kind: CustomKind,
+    pub name: String,
+    pub founded_tick: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct Settlement {
     pub id: u32,
@@ -83,6 +126,11 @@ pub struct Settlement {
     pub land_depleted: bool,
     /// Year of the last depletion-or-recovery chronicle emission, for spam control.
     pub last_land_event_year: Option<u64>,
+    /// Count of autumns in which the granary overflowed — a running tally of
+    /// prosperous years used as a pressure source for harvest-feast customs.
+    pub autumn_overflows: u32,
+    /// Cultural traditions that have emerged from this settlement's behavior.
+    pub customs: Vec<Custom>,
 }
 
 /// Signals emitted when a trade trip is recorded.
@@ -139,6 +187,62 @@ impl Settlement {
             allied: false,
         });
         sig
+    }
+
+    /// True if this settlement already practices a custom of the given kind.
+    pub fn has_custom(&self, kind: CustomKind) -> bool {
+        self.customs.iter().any(|c| c.kind == kind)
+    }
+
+    /// Does the settlement currently meet the conditions for a custom of
+    /// `kind`? Terrain-shaped customs consult the world map; the rest fall
+    /// back to per-settlement behavioral counters.
+    fn qualifies_for_custom(&self, kind: CustomKind, world: &World) -> bool {
+        match kind {
+            CustomKind::HarvestFeast => self.autumn_overflows >= CUSTOM_HARVEST_OVERFLOWS,
+            CustomKind::WarriorRite => self.raids_done >= CUSTOM_WARRIOR_RAIDS,
+            CustomKind::MemorialVigil => self.raids_suffered >= CUSTOM_MEMORIAL_SUFFERED,
+            CustomKind::MerchantFair => self.trades_completed >= CUSTOM_MERCHANT_TRADES,
+            CustomKind::RiverBlessing => {
+                world.is_near_river(self.col, self.row)
+                    || world.tile(self.col, self.row).map(|t| t.biome) == Some(Biome::Coast)
+            }
+            CustomKind::MountainPilgrimage => near_mountain(world, self.col, self.row),
+        }
+    }
+
+    /// Per-tick dice roll for cultural emergence. Returns a chronicle line if
+    /// a new custom took root. Each settlement can grow at most one custom of
+    /// a given kind over its lifetime, but multiple different kinds can stack.
+    pub fn maybe_emerge_custom(
+        &mut self,
+        world: &World,
+        rng: &mut ChaCha8Rng,
+        tick: u64,
+    ) -> Option<String> {
+        if tick.saturating_sub(self.founded_tick) < CUSTOM_MIN_AGE_TICKS {
+            return None;
+        }
+        for &kind in ALL_CUSTOM_KINDS.iter() {
+            if self.has_custom(kind) {
+                continue;
+            }
+            if !self.qualifies_for_custom(kind, world) {
+                continue;
+            }
+            if !rng.gen_bool(CUSTOM_CHANCE_PER_TICK) {
+                continue;
+            }
+            let name = pick_custom_name(kind, rng);
+            let line = custom_emergence_line(&self.name, kind, &name);
+            self.customs.push(Custom {
+                kind,
+                name,
+                founded_tick: tick,
+            });
+            return Some(line);
+        }
+        None
     }
 
     /// Record a raid against `other`; returns true if a blood feud was just declared.
@@ -211,6 +315,8 @@ impl Settlements {
             legend_crash: false,
             land_depleted: false,
             last_land_event_year: None,
+            autumn_overflows: 0,
+            customs: Vec::new(),
         });
         id
     }
@@ -357,6 +463,7 @@ pub fn update_settlements(
         if s.stockpile > 40.0 && !s.overflow_declared {
             if season_idx == 2 {
                 s.overflow_declared = true;
+                s.autumn_overflows += 1;
                 chronicle.record(Event::new(
                     tick,
                     format!("The granary of {} overflows with autumn harvest.", s.name),
@@ -365,6 +472,20 @@ pub fn update_settlements(
         } else if s.stockpile < 20.0 && s.overflow_declared {
             s.overflow_declared = false;
         }
+    }
+
+    // Cultural customs emerge from accumulated behavior. Each alive settlement
+    // rolls per tick against its candidate customs — the `maybe_emerge_custom`
+    // call gates on age, qualification, and a small per-tick probability so
+    // traditions take years to appear rather than minutes.
+    let custom_lines: Vec<String> = settlements
+        .list
+        .iter_mut()
+        .filter(|s| s.alive)
+        .filter_map(|s| s.maybe_emerge_custom(world, rng, tick))
+        .collect();
+    for line in custom_lines {
+        chronicle.record(Event::new(tick, line));
     }
 
     // Recount populations and retire any settlement that's lost all its people.
@@ -1216,6 +1337,94 @@ fn update_land_health(
             ));
         }
     }
+}
+
+/// Is there a mountain tile within [`CUSTOM_MOUNTAIN_RADIUS`] hexes of (col, row)?
+fn near_mountain(world: &World, col: i32, row: i32) -> bool {
+    for dc in -CUSTOM_MOUNTAIN_RADIUS..=CUSTOM_MOUNTAIN_RADIUS {
+        for dr in -CUSTOM_MOUNTAIN_RADIUS..=CUSTOM_MOUNTAIN_RADIUS {
+            let c = col + dc;
+            let r = row + dr;
+            if world.hex_distance((col, row), (c, r)) > CUSTOM_MOUNTAIN_RADIUS {
+                continue;
+            }
+            if let Some(t) = world.tile(c, r) {
+                if t.biome == Biome::Mountains {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Pick a custom name from a per-kind pool. Deterministic in the provided rng
+/// so runs with the same seed produce the same traditions.
+fn pick_custom_name(kind: CustomKind, rng: &mut ChaCha8Rng) -> String {
+    let pool: &[&str] = match kind {
+        CustomKind::HarvestFeast => &[
+            "the Feast of the Full Silo",
+            "the Harvest Gathering",
+            "the Rite of the Overflowing Granary",
+            "the Night of the Long Tables",
+        ],
+        CustomKind::WarriorRite => &[
+            "the Blood Oath",
+            "the Rite of the Iron Year",
+            "the Warrior's Vigil",
+            "the Hunt of Names",
+        ],
+        CustomKind::MemorialVigil => &[
+            "the Silent Vigil",
+            "the Night of Torches",
+            "the Remembrance of the Burning",
+            "the Day the Walls Wept",
+        ],
+        CustomKind::MerchantFair => &[
+            "the Full-Moon Market",
+            "the Caravan Circle",
+            "the Traders' Gathering",
+            "the Market at the Stone",
+        ],
+        CustomKind::RiverBlessing => &[
+            "the Blessing of the Waters",
+            "the Fishers' Song",
+            "the Offering to the River",
+            "the Rite of the Tides",
+        ],
+        CustomKind::MountainPilgrimage => &[
+            "the Pilgrimage to the High Stones",
+            "the Climb of the Elders",
+            "the Journey Above the Clouds",
+            "the Vigil upon the Peaks",
+        ],
+    };
+    pool[rng.gen_range(0..pool.len())].to_string()
+}
+
+/// Chronicle line announcing that a custom has taken root in a settlement.
+fn custom_emergence_line(settlement_name: &str, kind: CustomKind, custom_name: &str) -> String {
+    let (verb_phrase, coda) = match kind {
+        CustomKind::HarvestFeast => ("begin to keep", "a tradition born of plenty"),
+        CustomKind::WarriorRite => ("take up", "a tradition forged in the bloody years"),
+        CustomKind::MemorialVigil => ("begin to observe", "a tradition borne out of loss"),
+        CustomKind::MerchantFair => (
+            "establish",
+            "a tradition grown from the coming and going of merchants",
+        ),
+        CustomKind::RiverBlessing => (
+            "begin to hold",
+            "a tradition shaped by the waters that feed them",
+        ),
+        CustomKind::MountainPilgrimage => (
+            "take up",
+            "a tradition whispered by the stones that ring their home",
+        ),
+    };
+    format!(
+        "The people of {} {} {} — {}.",
+        settlement_name, verb_phrase, custom_name, coda
+    )
 }
 
 fn generate_name(rng: &mut ChaCha8Rng) -> String {
