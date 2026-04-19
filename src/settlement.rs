@@ -94,6 +94,64 @@ const ALL_CUSTOM_KINDS: [CustomKind; 6] = [
     CustomKind::MountainPilgrimage,
 ];
 
+/// Per-tick probability a settlement meeting any religion-emergence condition
+/// actually takes up a faith. Kept below [`CUSTOM_CHANCE_PER_TICK`] because
+/// religion is more narratively weighty than a custom — we want it to feel
+/// rare and earned.
+const RELIGION_CHANCE_PER_TICK: f64 = 0.006;
+/// Minimum settlement age before any religion can take root.
+const RELIGION_MIN_AGE_TICKS: u64 = 2 * TICKS_PER_YEAR;
+/// Stockpile value at or below which a settlement enters the "famine" state.
+const FAMINE_LOW_STOCK: f32 = 3.0;
+/// Stockpile value at or above which a famined settlement is considered
+/// recovered (and its survived-famine counter ticks up).
+const FAMINE_RECOVERED_STOCK: f32 = 18.0;
+/// Population peak must reach this before a later crash counts as "hardship".
+/// Without the floor, every brand-new settlement's founding dip would register.
+const HARDSHIP_MIN_PEAK: u32 = 15;
+/// Population must drop below this fraction of peak to enter the hardship
+/// state that a later boom can exit.
+const HARDSHIP_CRASH_FACTOR: f32 = 0.5;
+/// Population must recover to this fraction of the pre-hardship peak to count
+/// as a boom.
+const HARDSHIP_RECOVER_FACTOR: f32 = 0.8;
+/// Per-delivery chance a merchant's religion rubs off on the destination —
+/// small so faith spreads gradually over many trade trips, not overnight.
+pub const RELIGION_SPREAD_CHANCE: f64 = 0.05;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReligionKind {
+    /// Reverence of rivers, lakes, and the tides — takes root near water.
+    RiverFaith,
+    /// Worship of the high stones — takes root near mountains.
+    MountainCreed,
+    /// Thanksgiving cult that emerges after surviving a famine.
+    HarvestCovenant,
+    /// Gratitude to a divine protector after a raid defended against odds.
+    DivineShield,
+    /// A star-cult that takes root when a settlement booms back from hardship.
+    StarCult,
+}
+
+const ALL_RELIGION_KINDS: [ReligionKind; 5] = [
+    ReligionKind::HarvestCovenant,
+    ReligionKind::DivineShield,
+    ReligionKind::StarCult,
+    ReligionKind::RiverFaith,
+    ReligionKind::MountainCreed,
+];
+
+/// A faith that has taken root in a settlement. At most one per settlement
+/// (see [`Settlement::religion`]); competing pressures don't stack — the first
+/// to emerge wins.
+#[derive(Debug, Clone)]
+pub struct Religion {
+    pub kind: ReligionKind,
+    pub name: String,
+    pub founded_tick: u64,
+    pub founding_settlement: u32,
+}
+
 /// A cultural tradition a settlement has grown into over time. Each settlement
 /// may develop several customs, at most one of each [`CustomKind`].
 #[derive(Debug, Clone)]
@@ -132,6 +190,30 @@ pub struct Settlement {
     pub autumn_overflows: u32,
     /// Cultural traditions that have emerged from this settlement's behavior.
     pub customs: Vec<Custom>,
+    /// The settlement's faith, if one has taken root. At most one — competing
+    /// pressures don't stack; the first to emerge wins the slot.
+    pub religion: Option<Religion>,
+    /// Running tally of famines the settlement has endured and recovered from.
+    pub famines_survived: u32,
+    /// True while the settlement is currently in a famine (stockpile below
+    /// [`FAMINE_LOW_STOCK`]); transitions out bump `famines_survived`.
+    pub in_famine: bool,
+    /// True once the settlement has ever held a meaningful stockpile. Without
+    /// this gate, a freshly founded settlement's first stockpile accumulation
+    /// would trigger an immediate "famine survived" event.
+    pub ever_stocked: bool,
+    /// Count of raids repelled where the attackers outnumbered the defenders —
+    /// the settlement held against the odds, a common root of protective faith.
+    pub raids_repelled_vs_odds: u32,
+    /// Running tally of population booms that followed a pop crash from peak.
+    pub booms_after_hardship: u32,
+    /// True while the settlement is currently in a hardship window — pop has
+    /// fallen below a threshold fraction of its former peak and has not yet
+    /// recovered. Transitions out bump `booms_after_hardship`.
+    pub in_hardship: bool,
+    /// The population peak at the moment the hardship window opened, so a
+    /// later pop-peak growth doesn't move the recovery goalposts.
+    pub hardship_peak: Option<u32>,
     /// Index into [`Dialects::centers`] for the language this settlement was
     /// named in. `None` when the world was generated without any centers
     /// (tiny maps, or [`Settlements::new`] used directly in tests).
@@ -250,6 +332,58 @@ impl Settlement {
         None
     }
 
+    /// Does the settlement currently meet the conditions for a religion of
+    /// `kind`? Terrain-shaped faiths consult the world map; the rest gate on
+    /// per-settlement pressure counters (famines survived, raids repelled
+    /// against odds, booms after hardship).
+    fn qualifies_for_religion(&self, kind: ReligionKind, world: &World) -> bool {
+        match kind {
+            ReligionKind::HarvestCovenant => self.famines_survived >= 1,
+            ReligionKind::DivineShield => self.raids_repelled_vs_odds >= 1,
+            ReligionKind::StarCult => self.booms_after_hardship >= 1,
+            ReligionKind::RiverFaith => {
+                world.is_near_river(self.col, self.row)
+                    || world.tile(self.col, self.row).map(|t| t.biome) == Some(Biome::Coast)
+            }
+            ReligionKind::MountainCreed => near_mountain(world, self.col, self.row),
+        }
+    }
+
+    /// Per-tick dice roll for religion. At most one religion per settlement —
+    /// once a faith is in place, this is a no-op. Age-gated so a settlement
+    /// has to have lived some years before it starts explaining its fortune.
+    pub fn maybe_emerge_religion(
+        &mut self,
+        world: &World,
+        rng: &mut ChaCha8Rng,
+        tick: u64,
+    ) -> Option<String> {
+        if self.religion.is_some() {
+            return None;
+        }
+        if tick.saturating_sub(self.founded_tick) < RELIGION_MIN_AGE_TICKS {
+            return None;
+        }
+        for &kind in ALL_RELIGION_KINDS.iter() {
+            if !self.qualifies_for_religion(kind, world) {
+                continue;
+            }
+            if !rng.gen_bool(RELIGION_CHANCE_PER_TICK) {
+                continue;
+            }
+            let name = pick_religion_name(kind, rng);
+            let line = religion_emergence_line(&self.name, kind, &name);
+            self.religion = Some(Religion {
+                kind,
+                name,
+                founded_tick: tick,
+                founding_settlement: self.id,
+            });
+            return Some(line);
+        }
+        None
+    }
+
     /// Record a raid against `other`; returns true if a blood feud was just declared.
     pub fn note_raid(&mut self, other: u32) -> bool {
         for e in self.enmities.iter_mut() {
@@ -334,6 +468,14 @@ impl Settlements {
             last_land_event_year: None,
             autumn_overflows: 0,
             customs: Vec::new(),
+            religion: None,
+            famines_survived: 0,
+            in_famine: false,
+            ever_stocked: false,
+            raids_repelled_vs_odds: 0,
+            booms_after_hardship: 0,
+            in_hardship: false,
+            hardship_peak: None,
             dialect_id: dialect_idx.map(|i| i as u32),
         });
         id
@@ -490,6 +632,22 @@ pub fn update_settlements(
         } else if s.stockpile < 20.0 && s.overflow_declared {
             s.overflow_declared = false;
         }
+
+        // Famine tracking — religious pressure. A settlement hasn't had a
+        // meaningful famine until it has first held a stockpile; without the
+        // `ever_stocked` gate the founding "stockpile == 0" would register
+        // as in-famine from day one.
+        if !s.ever_stocked && s.stockpile >= FAMINE_RECOVERED_STOCK {
+            s.ever_stocked = true;
+        }
+        if s.ever_stocked {
+            if !s.in_famine && s.stockpile <= FAMINE_LOW_STOCK {
+                s.in_famine = true;
+            } else if s.in_famine && s.stockpile >= FAMINE_RECOVERED_STOCK {
+                s.in_famine = false;
+                s.famines_survived += 1;
+            }
+        }
     }
 
     // Cultural customs emerge from accumulated behavior. Each alive settlement
@@ -503,6 +661,20 @@ pub fn update_settlements(
         .filter_map(|s| s.maybe_emerge_custom(world, rng, tick))
         .collect();
     for line in custom_lines {
+        chronicle.record(Event::new(tick, line));
+    }
+
+    // Religion emergence: settlements that have accumulated religious pressure
+    // (surviving a famine, repelling a raid against odds, booming back from
+    // hardship) or sit on sacred terrain (rivers, mountains) may explain their
+    // fortune with a faith. One religion per settlement, ever.
+    let religion_lines: Vec<String> = settlements
+        .list
+        .iter_mut()
+        .filter(|s| s.alive)
+        .filter_map(|s| s.maybe_emerge_religion(world, rng, tick))
+        .collect();
+    for line in religion_lines {
         chronicle.record(Event::new(tick, line));
     }
 
@@ -530,6 +702,26 @@ pub fn update_settlements(
         }
         if pop > s.population_peak {
             s.population_peak = pop;
+        }
+        // Hardship-and-boom tracking — religious pressure. Enter the hardship
+        // window when pop crashes below `HARDSHIP_CRASH_FACTOR` of a meaningful
+        // prior peak; exit (and tally the boom) when pop climbs back to
+        // `HARDSHIP_RECOVER_FACTOR` of the peak that was lost.
+        if !s.in_hardship
+            && s.population_peak >= HARDSHIP_MIN_PEAK
+            && (pop as f32) < (s.population_peak as f32) * HARDSHIP_CRASH_FACTOR
+        {
+            s.in_hardship = true;
+            s.hardship_peak = Some(s.population_peak);
+        } else if s.in_hardship {
+            if let Some(pk) = s.hardship_peak {
+                let recovered = (pk as f32 * HARDSHIP_RECOVER_FACTOR) as u32;
+                if pop >= recovered {
+                    s.in_hardship = false;
+                    s.hardship_peak = None;
+                    s.booms_after_hardship += 1;
+                }
+            }
         }
         if !s.legend_fifty && pop >= 50 {
             s.legend_fifty = true;
@@ -1252,6 +1444,13 @@ fn raid_phase(
                     target_name
                 ),
             ));
+            // Holding against a stronger host is a classic seed of protective
+            // faith — religious pressure on the target.
+            if attackers > defenders {
+                if let Some(t) = settlements.list.iter_mut().find(|s| s.id == target_id) {
+                    t.raids_repelled_vs_odds += 1;
+                }
+            }
             let atk_losses = rng.gen_range(2..=3).min(attackers);
             let def_losses = rng.gen_range(0..=1);
             resolve_raid_outcome(
@@ -1443,6 +1642,127 @@ fn custom_emergence_line(settlement_name: &str, kind: CustomKind, custom_name: &
         "The people of {} {} {} — {}.",
         settlement_name, verb_phrase, custom_name, coda
     )
+}
+
+/// Pick a religion name from a per-kind pool, deterministic in `rng`.
+fn pick_religion_name(kind: ReligionKind, rng: &mut ChaCha8Rng) -> String {
+    let pool: &[&str] = match kind {
+        ReligionKind::RiverFaith => &[
+            "the Cult of the Running Waters",
+            "the Faith of the Deep Current",
+            "the Reverence of the Tides",
+            "the Covenant of the Fisher-Kings",
+        ],
+        ReligionKind::MountainCreed => &[
+            "the Creed of the High Stones",
+            "the Faith of the Quiet Peaks",
+            "the Path of the Stone-Speakers",
+            "the Covenant of the Cloud-Walkers",
+        ],
+        ReligionKind::HarvestCovenant => &[
+            "the Harvest Covenant",
+            "the Faith of the Full Silo",
+            "the Cult of the Returning Grain",
+            "the Pact of the Turning Year",
+        ],
+        ReligionKind::DivineShield => &[
+            "the Faith of the Shielding Hand",
+            "the Cult of the Watchful Ones",
+            "the Pact of the Standing Walls",
+            "the Covenant of the Kept Oath",
+        ],
+        ReligionKind::StarCult => &[
+            "the Cult of the Turning Stars",
+            "the Faith of the Returning Dawn",
+            "the Order of the Long Watch",
+            "the Covenant of the Night Sky",
+        ],
+    };
+    pool[rng.gen_range(0..pool.len())].to_string()
+}
+
+/// Human-readable patron of a faith — used in the emergence chronicle line.
+fn religion_patron(kind: ReligionKind) -> &'static str {
+    match kind {
+        ReligionKind::RiverFaith => "the waters",
+        ReligionKind::MountainCreed => "the high stones",
+        ReligionKind::HarvestCovenant => "the harvest that returned",
+        ReligionKind::DivineShield => "the hand that shielded them",
+        ReligionKind::StarCult => "the stars that wheeled above their dark years",
+    }
+}
+
+/// Chronicle line announcing a new faith. Rendered with *** markers so the
+/// TUI and stdout colorizer both promote it to a highlighted event.
+fn religion_emergence_line(settlement_name: &str, kind: ReligionKind, religion_name: &str) -> String {
+    format!(
+        "*** The people of {} begin to worship {} — {} ***",
+        settlement_name,
+        religion_patron(kind),
+        religion_name
+    )
+}
+
+/// Chronicle line announcing a religion adopted via trade from another
+/// settlement. Not starred — spread is a quieter event than founding.
+fn religion_spread_line(receiver: &str, origin: &str, religion_name: &str) -> String {
+    format!(
+        "{} takes up {} — the faith carried from {}.",
+        receiver, religion_name, origin
+    )
+}
+
+/// Per-delivery roll: if `origin` has a religion and `dest` doesn't, there's
+/// a small chance the faith crosses over. Records a chronicle line on success.
+pub fn try_spread_religion(
+    settlements: &mut Settlements,
+    origin_id: u32,
+    dest_id: u32,
+    rng: &mut ChaCha8Rng,
+    chronicle: &mut Chronicle,
+    tick: u64,
+) {
+    // Pull everything we need from origin and dest before any mutation — keeps
+    // the borrow checker happy when we finally write into dest.
+    let origin_info = settlements
+        .list
+        .iter()
+        .find(|s| s.id == origin_id && s.alive)
+        .and_then(|s| {
+            s.religion
+                .as_ref()
+                .map(|r| (s.name.clone(), r.clone()))
+        });
+    let Some((origin_name, origin_religion)) = origin_info else {
+        return;
+    };
+    let dest_has_none = settlements
+        .list
+        .iter()
+        .any(|s| s.id == dest_id && s.alive && s.religion.is_none());
+    if !dest_has_none {
+        return;
+    }
+    if !rng.gen_bool(RELIGION_SPREAD_CHANCE) {
+        return;
+    }
+    let dest_name = match settlements.list.iter().find(|s| s.id == dest_id) {
+        Some(s) => s.name.clone(),
+        None => return,
+    };
+    let adopted_name = origin_religion.name.clone();
+    if let Some(dest) = settlements.list.iter_mut().find(|s| s.id == dest_id) {
+        dest.religion = Some(Religion {
+            kind: origin_religion.kind,
+            name: adopted_name.clone(),
+            founded_tick: tick,
+            founding_settlement: origin_religion.founding_settlement,
+        });
+    }
+    chronicle.record(Event::new(
+        tick,
+        religion_spread_line(&dest_name, &origin_name, &adopted_name),
+    ));
 }
 
 /// Master pool of name prefixes. Each dialect draws a random subset from this
@@ -1676,5 +1996,214 @@ mod tests {
             let name = generate_name(&mut rng, Some(&dialect));
             assert_eq!(name, "Zyzog");
         }
+    }
+
+    // ---- religion tests ----
+
+    /// Build a testable settlement at (col, row) already aged past the
+    /// religion-emergence gate. Intended only for unit tests; normal code
+    /// founds settlements via [`Settlements::found`].
+    fn test_settlement(id: u32, col: i32, row: i32) -> Settlement {
+        Settlement {
+            id,
+            name: format!("Test{}", id),
+            col,
+            row,
+            founded_tick: 0,
+            population: 0,
+            alive: true,
+            stockpile: 0.0,
+            overflow_declared: false,
+            routes: Vec::new(),
+            enmities: Vec::new(),
+            raids_done: 0,
+            raids_suffered: 0,
+            trades_completed: 0,
+            population_peak: 0,
+            trait_kind: None,
+            legend_fifty: false,
+            legend_crash: false,
+            land_depleted: false,
+            last_land_event_year: None,
+            autumn_overflows: 0,
+            customs: Vec::new(),
+            religion: None,
+            famines_survived: 0,
+            in_famine: false,
+            ever_stocked: false,
+            raids_repelled_vs_odds: 0,
+            booms_after_hardship: 0,
+            in_hardship: false,
+            hardship_peak: None,
+            dialect_id: None,
+        }
+    }
+
+    fn land_tile(world: &World) -> (i32, i32) {
+        for row in 0..world.height as i32 {
+            for col in 0..world.width as i32 {
+                if world.is_land(col, row) {
+                    return (col, row);
+                }
+            }
+        }
+        panic!("no land on test world");
+    }
+
+    fn coast_tile(world: &World) -> Option<(i32, i32)> {
+        for row in 0..world.height as i32 {
+            for col in 0..world.width as i32 {
+                if world.tile(col, row).map(|t| t.biome) == Some(Biome::Coast) {
+                    return Some((col, row));
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn religion_requires_settlement_age() {
+        let world = World::generate(80, 40, 7);
+        let (c, r) = land_tile(&world);
+        let mut s = test_settlement(0, c, r);
+        s.famines_survived = 1; // would otherwise qualify for HarvestCovenant
+        let mut rng = ChaCha8Rng::seed_from_u64(1);
+        // Just shy of the age gate.
+        let tick = RELIGION_MIN_AGE_TICKS - 1;
+        for _ in 0..1000 {
+            assert!(s.maybe_emerge_religion(&world, &mut rng, tick).is_none());
+        }
+        assert!(s.religion.is_none());
+    }
+
+    #[test]
+    fn religion_does_not_stack() {
+        let world = World::generate(80, 40, 7);
+        let (c, r) = land_tile(&world);
+        let mut s = test_settlement(0, c, r);
+        s.religion = Some(Religion {
+            kind: ReligionKind::HarvestCovenant,
+            name: "the Harvest Covenant".to_string(),
+            founded_tick: 0,
+            founding_settlement: 0,
+        });
+        s.famines_survived = 5;
+        s.raids_repelled_vs_odds = 5;
+        let mut rng = ChaCha8Rng::seed_from_u64(2);
+        let tick = RELIGION_MIN_AGE_TICKS + 500;
+        // Even over many rolls and multiple eligible kinds, the religion
+        // already in place is preserved — no stacking.
+        for _ in 0..5000 {
+            assert!(s.maybe_emerge_religion(&world, &mut rng, tick).is_none());
+        }
+        assert_eq!(s.religion.as_ref().unwrap().kind, ReligionKind::HarvestCovenant);
+    }
+
+    #[test]
+    fn harvest_covenant_qualifies_after_famine_survived() {
+        let world = World::generate(80, 40, 7);
+        let (c, r) = land_tile(&world);
+        let mut s = test_settlement(0, c, r);
+        s.famines_survived = 1;
+        // Keep rolling until the probability lands — with a fixed seed this
+        // terminates quickly and deterministically. Bounded just in case.
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let mut line: Option<String> = None;
+        for t in 0..20_000 {
+            let tick = RELIGION_MIN_AGE_TICKS + t as u64;
+            if let Some(l) = s.maybe_emerge_religion(&world, &mut rng, tick) {
+                line = Some(l);
+                break;
+            }
+        }
+        let line = line.expect("religion should have emerged within the trial window");
+        assert!(line.starts_with("***"), "religion line should be starred");
+        assert!(line.contains("Test0"));
+        let religion = s.religion.expect("religion set");
+        // The first eligible kind in ALL_RELIGION_KINDS is HarvestCovenant,
+        // so harvest pressure wins when it's the only pressure present.
+        assert_eq!(religion.kind, ReligionKind::HarvestCovenant);
+    }
+
+    #[test]
+    fn river_faith_qualifies_on_coast_tile() {
+        let world = World::generate(80, 40, 7);
+        let Some((c, r)) = coast_tile(&world) else {
+            // Some generated worlds happen not to have coast; skip cleanly.
+            return;
+        };
+        let mut s = test_settlement(0, c, r);
+        assert!(s.qualifies_for_religion(ReligionKind::RiverFaith, &world));
+        // No other pressures, so RiverFaith is the only eligible kind.
+        let mut rng = ChaCha8Rng::seed_from_u64(99);
+        for t in 0..20_000 {
+            let tick = RELIGION_MIN_AGE_TICKS + t as u64;
+            if s.maybe_emerge_religion(&world, &mut rng, tick).is_some() {
+                assert_eq!(s.religion.as_ref().unwrap().kind, ReligionKind::RiverFaith);
+                return;
+            }
+        }
+        panic!("river faith should have emerged within the trial window");
+    }
+
+    #[test]
+    fn religion_spreads_via_merchant() {
+        let world = World::generate(80, 40, 7);
+        let (c, r) = land_tile(&world);
+        let mut settlements = Settlements::new();
+        settlements.list.push(test_settlement(0, c, r));
+        settlements.list.push(test_settlement(1, c + 1, r));
+        settlements.list[0].religion = Some(Religion {
+            kind: ReligionKind::MountainCreed,
+            name: "the Creed of the High Stones".to_string(),
+            founded_tick: 0,
+            founding_settlement: 0,
+        });
+        let mut rng = ChaCha8Rng::seed_from_u64(3);
+        let mut ch = Chronicle::sink();
+        // Many deliveries — spread is a small per-trip chance, so eventually
+        // one roll should land.
+        let _ = &world;
+        for _ in 0..5000 {
+            try_spread_religion(&mut settlements, 0, 1, &mut rng, &mut ch, 1000);
+            if settlements.list[1].religion.is_some() {
+                break;
+            }
+        }
+        let got = settlements.list[1]
+            .religion
+            .as_ref()
+            .expect("faith should have spread within the trial window");
+        assert_eq!(got.kind, ReligionKind::MountainCreed);
+        assert_eq!(got.founding_settlement, 0);
+    }
+
+    #[test]
+    fn religion_spread_never_overwrites_existing_faith() {
+        let world = World::generate(80, 40, 7);
+        let (c, r) = land_tile(&world);
+        let mut settlements = Settlements::new();
+        settlements.list.push(test_settlement(0, c, r));
+        settlements.list.push(test_settlement(1, c + 1, r));
+        settlements.list[0].religion = Some(Religion {
+            kind: ReligionKind::MountainCreed,
+            name: "A".to_string(),
+            founded_tick: 0,
+            founding_settlement: 0,
+        });
+        settlements.list[1].religion = Some(Religion {
+            kind: ReligionKind::RiverFaith,
+            name: "B".to_string(),
+            founded_tick: 0,
+            founding_settlement: 1,
+        });
+        let mut rng = ChaCha8Rng::seed_from_u64(7);
+        let mut ch = Chronicle::sink();
+        let _ = &world;
+        for _ in 0..5000 {
+            try_spread_religion(&mut settlements, 0, 1, &mut rng, &mut ch, 1000);
+        }
+        // Destination's own faith is preserved; no stacking, no overwrite.
+        assert_eq!(settlements.list[1].religion.as_ref().unwrap().name, "B");
     }
 }

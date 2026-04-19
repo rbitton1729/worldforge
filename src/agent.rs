@@ -1,5 +1,5 @@
 use crate::chronicle::{Chronicle, Event, TICKS_PER_YEAR};
-use crate::settlement::Settlements;
+use crate::settlement::{try_spread_religion, Settlements};
 use crate::world::{Biome, World, FERTILITY_PER_BITE};
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
@@ -446,9 +446,16 @@ pub fn step_agents(
             }
         }
 
-        // Starvation damage.
+        // Starvation damage. Agents whose settlement has a religion take a
+        // small morale bonus — faith makes hunger a little more bearable.
+        // Subtle by design: the narrative is the product, not the mechanic.
         if agent.hunger >= HUNGER_MAX {
-            agent.health -= STARVE_DAMAGE;
+            let faith_bonus = agent
+                .settlement
+                .and_then(|sid| settlements.list.iter().find(|s| s.id == sid))
+                .map_or(false, |s| s.religion.is_some());
+            let damage = if faith_bonus { STARVE_DAMAGE * 0.8 } else { STARVE_DAMAGE };
+            agent.health -= damage;
         } else if agent.health < 100.0 && agent.hunger < 40.0 {
             agent.health = (agent.health + 0.5).min(100.0);
         }
@@ -669,6 +676,15 @@ fn step_merchant(
                         let line =
                             format!("{} has become a trusted merchant.", agent.name);
                         record_skill_milestone(agent, chronicle, tick, line);
+                    }
+                    // Religion spread — a small per-trade chance that the
+                    // origin's faith rubs off on the destination. Only fires
+                    // when the destination has no religion of its own (no
+                    // stacking) and the origin does.
+                    if let Some(oid) = origin_id {
+                        try_spread_religion(
+                            settlements, oid, dest_id, rng, chronicle, tick,
+                        );
                     }
                 } else {
                     move_agent_to(world, agent, step_toward(world, agent.col, agent.row, dc, dr));

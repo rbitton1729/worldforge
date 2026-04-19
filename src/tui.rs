@@ -480,6 +480,11 @@ fn draw_stats_bar(
         .filter(|s| s.alive)
         .map(|s| s.customs.len())
         .sum();
+    let faith_count: usize = settlements
+        .list
+        .iter()
+        .filter(|s| s.alive && s.religion.is_some())
+        .count();
     let legend_count = agents.iter().filter(|a| a.alive && a.epithet.is_some()).count();
     let year = tick / TICKS_PER_YEAR + 1;
     let season = ["Spring", "Summer", "Autumn", "Winter"][season_idx(tick)];
@@ -525,6 +530,12 @@ fn draw_stats_bar(
         Span::styled(
             format!("{}", custom_count),
             Style::default().fg(Color::Rgb(220, 180, 240)).bg(bg),
+        ),
+        sep(),
+        Span::styled("Faiths ", Style::default().fg(dim).bg(bg)),
+        Span::styled(
+            format!("{}", faith_count),
+            Style::default().fg(Color::Rgb(240, 210, 170)).bg(bg),
         ),
         sep(),
         Span::styled("Legends ", Style::default().fg(dim).bg(bg)),
