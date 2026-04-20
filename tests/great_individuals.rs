@@ -1,6 +1,6 @@
-use worldforge::agent::{choose_epithet, Deeds, Agent};
+use worldforge::agent::{Agent, Deeds, choose_epithet};
 use worldforge::chronicle::Chronicle;
-use worldforge::{run_simulation, SimConfig};
+use worldforge::{SimConfig, run_simulation};
 
 #[test]
 fn deeds_default_is_not_notable() {
@@ -52,7 +52,11 @@ fn epithet_warlord_wins_over_merchant() {
     d.deliveries = 5;
     let e = choose_epithet(&d, 0);
     assert!(
-        e.contains("Conqueror") || e.contains("Iron") || e.contains("Fierce") || e.contains("Raider") || e.contains("Unyielding"),
+        e.contains("Conqueror")
+            || e.contains("Iron")
+            || e.contains("Fierce")
+            || e.contains("Raider")
+            || e.contains("Unyielding"),
         "expected warlord epithet, got: {}",
         e
     );
@@ -96,7 +100,14 @@ fn chronicle_great_individuals_appear_in_long_sim() {
     // Check that at least one great individual was recognized (lines with *** and an epithet).
     let great_lines: Vec<&str> = text
         .lines()
-        .filter(|l| l.contains("***") && (l.contains("who led") || l.contains("who carried") || l.contains("who survived") || l.contains("who founded") || l.contains("whose deeds")))
+        .filter(|l| {
+            l.contains("***")
+                && (l.contains("who led")
+                    || l.contains("who carried")
+                    || l.contains("who survived")
+                    || l.contains("who founded")
+                    || l.contains("whose deeds"))
+        })
         .collect();
     assert!(
         !great_lines.is_empty(),
@@ -129,5 +140,8 @@ fn great_individuals_deterministic() {
 
     let a = std::fs::read_to_string(&path_a).unwrap();
     let b = std::fs::read_to_string(&path_b).unwrap();
-    assert_eq!(a, b, "same seed must produce identical great-individual chronicle");
+    assert_eq!(
+        a, b,
+        "same seed must produce identical great-individual chronicle"
+    );
 }

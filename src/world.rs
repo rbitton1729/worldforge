@@ -260,8 +260,7 @@ impl World {
             let natural = tile.biome.natural_fertility();
             if fert < natural && cap > 0.0 {
                 let heal_mul = if tile.food >= cap * 0.7 { 1.0 } else { 0.3 };
-                tile.fertility =
-                    (fert + FERTILITY_RECOVERY * factor * heal_mul).min(natural);
+                tile.fertility = (fert + FERTILITY_RECOVERY * factor * heal_mul).min(natural);
             }
         }
     }
@@ -280,7 +279,11 @@ impl World {
             .clamp(CLIMATE_DRIFT_MIN, CLIMATE_DRIFT_MAX);
 
         if year >= self.climate_next_flip_year {
-            let dir_sign: f32 = if self.climate_rng.gen_bool(0.5) { 1.0 } else { -1.0 };
+            let dir_sign: f32 = if self.climate_rng.gen_bool(0.5) {
+                1.0
+            } else {
+                -1.0
+            };
             let dir_scale: f32 = self.climate_rng.gen_range(0.6f32..=1.4f32);
             self.climate_direction = dir_sign * CLIMATE_DRIFT_MAGNITUDE * dir_scale;
             self.climate_next_flip_year = year + self.climate_rng.gen_range(50..=100);

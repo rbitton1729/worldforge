@@ -91,8 +91,8 @@ fn tile_idx(col: i32, row: i32, width: u32, height: u32) -> Option<usize> {
 /// Generate rivers flowing from high ground to the coast.
 /// Uses seeded RNG to pick sources and determine flow paths.
 fn generate_rivers(tiles: &mut [Tile], width: u32, height: u32, seed: u64) {
-    use rand::SeedableRng;
     use rand::Rng;
+    use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
 
     let mut rng = ChaCha8Rng::seed_from_u64(seed.wrapping_add(777));
@@ -260,12 +260,12 @@ mod probe_tests {
     fn probe_elev() {
         let tiles = generate_tiles(80, 40, 42);
         let mut elevs: Vec<f32> = tiles.iter().map(|t| t.elevation).collect();
-        elevs.sort_by(|a,b| a.partial_cmp(b).unwrap());
+        elevs.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let n = elevs.len();
         for p in [0.50, 0.70, 0.80, 0.85, 0.90, 0.95, 0.98, 0.99, 1.00] {
-            let i = ((n as f32 * p) as usize).min(n-1);
+            let i = ((n as f32 * p) as usize).min(n - 1);
             eprintln!("p{:.2} = {:.3}", p, elevs[i]);
         }
-        eprintln!("max = {:.3}", elevs[n-1]);
+        eprintln!("max = {:.3}", elevs[n - 1]);
     }
 }

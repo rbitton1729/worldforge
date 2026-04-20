@@ -2,9 +2,9 @@
 //! can respond to user input; mirrors the sequence of phases in
 //! `run_simulation` but interleaves rendering and keyboard events.
 
-use crate::agent::{alive_count, seed_agents, step_agents, Agent};
+use crate::agent::{Agent, alive_count, seed_agents, step_agents};
 use crate::chronicle::{Chronicle, Event, TICKS_PER_YEAR};
-use crate::settlement::{update_settlements, Dialects, Settlement, Settlements, Trait};
+use crate::settlement::{Dialects, Settlement, Settlements, Trait, update_settlements};
 use crate::world::{Biome, World};
 use crate::{SimConfig, SimOutcome};
 
@@ -14,15 +14,15 @@ use rand_chacha::ChaCha8Rng;
 use crossterm::{
     event::{self, KeyCode, KeyEvent, KeyEventKind},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
-    Frame, Terminal,
 };
 
 use std::collections::{HashMap, VecDeque};
@@ -260,7 +260,9 @@ fn run_inner(
         // --- idle: avoid burning CPU when paused or between scheduled ticks.
         if !should_tick {
             let cap = Duration::from_millis(16); // ~60 fps input responsiveness
-            let wait = next_tick_due.saturating_duration_since(Instant::now()).min(cap);
+            let wait = next_tick_due
+                .saturating_duration_since(Instant::now())
+                .min(cap);
             if ui.paused || sim_over {
                 std::thread::sleep(cap);
             } else if !wait.is_zero() {
@@ -438,7 +440,16 @@ fn draw(
         draw_map(f, map_area, world, settlements, agents, tick, ui);
     }
     draw_events(f, events_area, &ui.event_log);
-    draw_stats_bar(f, stats_area, world, settlements, agents, tick, sim_over, ui);
+    draw_stats_bar(
+        f,
+        stats_area,
+        world,
+        settlements,
+        agents,
+        tick,
+        sim_over,
+        ui,
+    );
 
     if ui.show_help {
         draw_help_overlay(f, outer);
@@ -485,7 +496,10 @@ fn draw_stats_bar(
         .iter()
         .filter(|s| s.alive && s.religion.is_some())
         .count();
-    let legend_count = agents.iter().filter(|a| a.alive && a.epithet.is_some()).count();
+    let legend_count = agents
+        .iter()
+        .filter(|a| a.alive && a.epithet.is_some())
+        .count();
     let year = tick / TICKS_PER_YEAR + 1;
     let season = ["Spring", "Summer", "Autumn", "Winter"][season_idx(tick)];
     let status = if sim_over {
@@ -514,11 +528,17 @@ fn draw_stats_bar(
         Span::styled(" Year ", Style::default().fg(dim).bg(bg)),
         Span::styled(
             format!("{} ({})", year, season),
-            Style::default().fg(accent).bg(bg).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(accent)
+                .bg(bg)
+                .add_modifier(Modifier::BOLD),
         ),
         sep(),
         Span::styled("Pop ", Style::default().fg(dim).bg(bg)),
-        Span::styled(format!("{}", pop), Style::default().fg(Color::LightGreen).bg(bg)),
+        Span::styled(
+            format!("{}", pop),
+            Style::default().fg(Color::LightGreen).bg(bg),
+        ),
         Span::styled(" ", Style::default().bg(bg)),
         Span::styled(arrow, Style::default().fg(arrow_color).bg(bg)),
         Span::styled(delta_str, Style::default().fg(dim).bg(bg)),
@@ -541,7 +561,10 @@ fn draw_stats_bar(
         Span::styled("Legends ", Style::default().fg(dim).bg(bg)),
         Span::styled(
             format!("{}", legend_count),
-            Style::default().fg(accent).bg(bg).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(accent)
+                .bg(bg)
+                .add_modifier(Modifier::BOLD),
         ),
         sep(),
         Span::styled("Speed ", Style::default().fg(dim).bg(bg)),
@@ -640,32 +663,49 @@ fn format_event_line(tick: u64, text: &str, max_width: usize, depth: usize) -> L
     let body_color = if body.starts_with("***") {
         // Dramatic chronicle events
         dim(Color::Rgb(255, 200, 120))
-    } else if body.contains("raid") || body.contains("burn") || body.contains("sack")
-        || body.contains("attack") || body.contains("war")
+    } else if body.contains("raid")
+        || body.contains("burn")
+        || body.contains("sack")
+        || body.contains("attack")
+        || body.contains("war")
     {
         dim(Color::Rgb(255, 100, 90))
-    } else if body.contains("founded") || body.contains("settlement")
+    } else if body.contains("founded")
+        || body.contains("settlement")
         || body.contains("established")
     {
         dim(Color::Rgb(120, 200, 255))
-    } else if body.contains("alliance") || body.contains("allied") || body.contains("trade")
+    } else if body.contains("alliance")
+        || body.contains("allied")
+        || body.contains("trade")
         || body.contains("treaty")
     {
         dim(Color::Rgb(200, 230, 120))
-    } else if body.contains("famine") || body.contains("starv") || body.contains("dwindle")
-        || body.contains("died") || body.contains("fallen") || body.contains("perish")
+    } else if body.contains("famine")
+        || body.contains("starv")
+        || body.contains("dwindle")
+        || body.contains("died")
+        || body.contains("fallen")
+        || body.contains("perish")
     {
         dim(Color::Rgb(230, 150, 150))
-    } else if body.contains("birth") || body.contains("swell") || body.contains("born")
+    } else if body.contains("birth")
+        || body.contains("swell")
+        || body.contains("born")
         || body.contains("child")
     {
         dim(Color::Rgb(150, 230, 150))
-    } else if body.contains("custom") || body.contains("tradition") || body.contains("legend")
+    } else if body.contains("custom")
+        || body.contains("tradition")
+        || body.contains("legend")
         || body.contains("epithet")
     {
         dim(Color::Rgb(220, 180, 255))
-    } else if body.contains("climate") || body.contains("drought") || body.contains("flood")
-        || body.contains("harsh winter") || body.contains("mild")
+    } else if body.contains("climate")
+        || body.contains("drought")
+        || body.contains("flood")
+        || body.contains("harsh winter")
+        || body.contains("mild")
     {
         dim(Color::Rgb(180, 220, 240))
     } else {
@@ -791,9 +831,17 @@ fn draw_map(
     }
 
     match ui.zoom {
-        Zoom::Normal => {
-            draw_map_halfblock(f, inner, world, settlements, &legend_counts, tick, ui, 1, false)
-        }
+        Zoom::Normal => draw_map_halfblock(
+            f,
+            inner,
+            world,
+            settlements,
+            &legend_counts,
+            tick,
+            ui,
+            1,
+            false,
+        ),
         Zoom::Out => {
             let cols = inner.width as u32;
             let halfrows = inner.height as u32 * 2;
@@ -876,11 +924,9 @@ fn draw_map_halfblock(
     // -- route overlay (declared + allied trade routes, plus blood feuds)
     // Drawn first so settlement markers render on top.
     let mut routes: HashMap<(i32, i32), RouteCell> = HashMap::new();
-    plot_routes(
-        &mut routes,
-        settlements,
-        |c, r| world_to_term(c, r, start_col, start_row, s, s, cols, rows),
-    );
+    plot_routes(&mut routes, settlements, |c, r| {
+        world_to_term(c, r, start_col, start_row, s, s, cols, rows)
+    });
 
     // -- settlement markers (live + ruins), indexed by (term_col, term_row).
     // Each cell is one half-block char cell; a settlement wins the whole cell
@@ -1014,7 +1060,10 @@ fn plot_routes<F: Fn(i32, i32) -> Option<(i32, i32)>>(
             if r.other_id <= s.id || !r.declared {
                 continue;
             }
-            let Some(other) = settlements.list.iter().find(|o| o.id == r.other_id && o.alive)
+            let Some(other) = settlements
+                .list
+                .iter()
+                .find(|o| o.id == r.other_id && o.alive)
             else {
                 continue;
             };
@@ -1034,7 +1083,10 @@ fn plot_routes<F: Fn(i32, i32) -> Option<(i32, i32)>>(
             if !e.blood_feud || e.other_id <= s.id {
                 continue;
             }
-            let Some(other) = settlements.list.iter().find(|o| o.id == e.other_id && o.alive)
+            let Some(other) = settlements
+                .list
+                .iter()
+                .find(|o| o.id == e.other_id && o.alive)
             else {
                 continue;
             };
@@ -1187,10 +1239,7 @@ fn draw_map_zoomed_in(
                 // Marker in first col of the tile, blank fill in second col
                 spans.push(Span::styled(String::from(m.ch), style));
                 if let Some(flash_bg) = m.bg_override {
-                    spans.push(Span::styled(
-                        " ".to_string(),
-                        Style::default().bg(flash_bg),
-                    ));
+                    spans.push(Span::styled(" ".to_string(), Style::default().bg(flash_bg)));
                 } else {
                     spans.push(Span::styled(
                         "▀".to_string(),
@@ -1278,23 +1327,48 @@ fn draw_help_overlay(f: &mut Frame, full: Rect) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(vec![
-            Span::styled(" A ", Style::default().fg(C_MARKER_DEFAULT).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " A ",
+                Style::default()
+                    .fg(C_MARKER_DEFAULT)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("  settlement (name initial)"),
         ]),
         Line::from(vec![
-            Span::styled(" A ", Style::default().fg(C_MARKER_MILITANT).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " A ",
+                Style::default()
+                    .fg(C_MARKER_MILITANT)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("  militant (raids often)"),
         ]),
         Line::from(vec![
-            Span::styled(" A ", Style::default().fg(C_MARKER_MERCANTILE).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " A ",
+                Style::default()
+                    .fg(C_MARKER_MERCANTILE)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("  mercantile (haven of trade)"),
         ]),
         Line::from(vec![
-            Span::styled(" A ", Style::default().fg(C_MARKER_DEPLETED).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " A ",
+                Style::default()
+                    .fg(C_MARKER_DEPLETED)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("  land around it depleted"),
         ]),
         Line::from(vec![
-            Span::styled(" · ", Style::default().fg(C_MARKER_DEAD).add_modifier(Modifier::DIM)),
+            Span::styled(
+                " · ",
+                Style::default()
+                    .fg(C_MARKER_DEAD)
+                    .add_modifier(Modifier::DIM),
+            ),
             Span::raw("  ruin (settlement fallen)"),
         ]),
         Line::from(vec![

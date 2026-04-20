@@ -1,6 +1,6 @@
 use worldforge::agent::alive_count;
 use worldforge::chronicle::Chronicle;
-use worldforge::{run_simulation, SimConfig};
+use worldforge::{SimConfig, run_simulation};
 
 #[test]
 fn population_is_never_negative() {
@@ -137,13 +137,21 @@ fn agent_health_and_hunger_bounded() {
     let outcome = run_simulation(cfg, &mut Chronicle::sink());
     for a in &outcome.agents {
         assert!(a.hunger >= 0.0, "hunger went negative: {}", a.hunger);
-        assert!(a.hunger <= 100.0 + 1e-3, "hunger exceeded max: {}", a.hunger);
+        assert!(
+            a.hunger <= 100.0 + 1e-3,
+            "hunger exceeded max: {}",
+            a.hunger
+        );
         // Health may dip below 0 briefly before the death check on the same tick
         // flips `alive`; once dead it isn't updated further. Dead agents may
         // legitimately have health <= 0.
         if a.alive {
             assert!(a.health > 0.0, "living agent with health {}", a.health);
-            assert!(a.health <= 100.0 + 1e-3, "health exceeded max: {}", a.health);
+            assert!(
+                a.health <= 100.0 + 1e-3,
+                "health exceeded max: {}",
+                a.health
+            );
         }
     }
 }

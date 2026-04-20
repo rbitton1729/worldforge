@@ -1,5 +1,5 @@
 use worldforge::chronicle::Chronicle;
-use worldforge::{run_simulation, SimConfig};
+use worldforge::{SimConfig, run_simulation};
 
 #[test]
 fn settlements_form_when_agents_cluster() {
@@ -94,6 +94,54 @@ fn settlement_population_matches_agents() {
         assert_eq!(
             s.population, actual,
             "settlement {} population {} does not match agent affiliation count {}",
+            s.name, s.population, actual
+        );
+    }
+}
+
+#[test]
+fn conquest_transfers_population() {
+    // Dense map with many agents over a long run — conditions ripe for raids
+    // and conquest. After conquest, surviving civilians must belong to an alive
+    // settlement, never to the conquered (dead) one.
+    let cfg = SimConfig {
+        seed: 42,
+        width: 40,
+        height: 20,
+        agents: 180,
+        ticks: 3000,
+        tick_rate: None,
+        profile: false,
+    };
+    let outcome = run_simulation(cfg, &mut Chronicle::sink());
+    let dead_ids: Vec<u32> = outcome
+        .settlements
+        .list
+        .iter()
+        .filter(|s| !s.alive)
+        .map(|s| s.id)
+        .collect();
+    // Every living agent's settlement must point to an alive settlement.
+    for a in outcome.agents.iter().filter(|a| a.alive) {
+        if let Some(sid) = a.settlement {
+            assert!(
+                !dead_ids.contains(&sid),
+                "agent {} belongs to dead settlement {} — conquest absorption bug",
+                a.name,
+                sid
+            );
+        }
+    }
+    // Alive settlement populations must match their agent counts.
+    for s in outcome.settlements.list.iter().filter(|s| s.alive) {
+        let actual = outcome
+            .agents
+            .iter()
+            .filter(|a| a.alive && a.settlement == Some(s.id))
+            .count() as u32;
+        assert_eq!(
+            s.population, actual,
+            "post-conquest settlement {} pop {} != agent count {}",
             s.name, s.population, actual
         );
     }

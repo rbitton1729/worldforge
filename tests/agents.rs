@@ -1,9 +1,9 @@
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use worldforge::agent::{alive_count, seed_agents, Agent};
-use worldforge::world::World;
+use worldforge::agent::{Agent, alive_count, seed_agents};
 use worldforge::chronicle::Chronicle;
-use worldforge::{run_simulation, SimConfig};
+use worldforge::world::World;
+use worldforge::{SimConfig, run_simulation};
 
 #[test]
 fn agents_spawn_on_passable_land() {

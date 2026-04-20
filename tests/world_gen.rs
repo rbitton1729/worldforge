@@ -83,12 +83,7 @@ fn regen_food_respects_cap() {
             } else {
                 t.biome.food_cap()
             };
-            assert!(
-                t.food <= cap + 1e-4,
-                "food {} exceeds cap {}",
-                t.food,
-                cap
-            );
+            assert!(t.food <= cap + 1e-4, "food {} exceeds cap {}", t.food, cap);
         }
     }
 }

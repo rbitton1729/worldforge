@@ -1,6 +1,6 @@
 use worldforge::chronicle::Chronicle;
 use worldforge::world::World;
-use worldforge::{run_simulation, SimConfig};
+use worldforge::{SimConfig, run_simulation};
 
 #[test]
 fn every_region_has_nonempty_name() {
@@ -24,11 +24,7 @@ fn regions_do_not_overlap() {
     for row in 0..w.height as i32 {
         for col in 0..w.width as i32 {
             if let Some(r) = w.region_at(col, row) {
-                let idx = w
-                    .regions
-                    .iter()
-                    .position(|rr| std::ptr::eq(rr, r))
-                    .unwrap();
+                let idx = w.regions.iter().position(|rr| std::ptr::eq(rr, r)).unwrap();
                 counted[idx] += 1;
             }
         }
@@ -73,8 +69,7 @@ fn region_names_are_unique() {
 fn named_regions_appear_in_settlement_founding() {
     let mut found_in_region = false;
     for seed in [1u64, 42, 7, 100, 314, 999] {
-        let path = std::env::temp_dir()
-            .join(format!("worldforge-region-founding-{}.txt", seed));
+        let path = std::env::temp_dir().join(format!("worldforge-region-founding-{}.txt", seed));
         let cfg = SimConfig {
             seed,
             width: 80,

@@ -25,7 +25,7 @@ Settlements form, trade, raid each other, develop traits. The chronicle narrates
 - [ ] Alliances matter — allied settlements share warriors during raids
 - [ ] Territory claims — settlements mark borders, crossing them provokes conflict
 - [ ] Sieges — not just raids, but sustained blockades of starving settlements
-- [ ] Conquest — victorious settlement absorbs the loser's population
+- [x] Conquest — victorious settlement absorbs the loser's population
 - [ ] War chronicles — multi-season wars with named battles, retreats, last stands
 
 ## v0.5.0 — Economy Deepens

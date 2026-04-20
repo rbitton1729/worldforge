@@ -1,5 +1,5 @@
 use worldforge::chronicle::Chronicle;
-use worldforge::{run_simulation, SimConfig};
+use worldforge::{SimConfig, run_simulation};
 
 fn run_and_read(seed: u64, ticks: u64, path_suffix: &str) -> String {
     let path = std::env::temp_dir().join(format!("worldforge-chronicle-{}.txt", path_suffix));

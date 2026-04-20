@@ -1,6 +1,6 @@
 use crate::chronicle::{Chronicle, Event, TICKS_PER_YEAR};
-use crate::settlement::{try_spread_religion, Settlements};
-use crate::world::{Biome, World, FERTILITY_PER_BITE};
+use crate::settlement::{Settlements, try_spread_religion};
+use crate::world::{Biome, FERTILITY_PER_BITE, World};
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 
@@ -87,16 +87,30 @@ impl Deeds {
 }
 
 const EPITHET_WARLORD: &[&str] = &[
-    "the Conqueror", "the Iron", "the Fierce", "the Raider", "the Unyielding",
+    "the Conqueror",
+    "the Iron",
+    "the Fierce",
+    "the Raider",
+    "the Unyielding",
 ];
 const EPITHET_MERCHANT: &[&str] = &[
-    "the Wanderer", "the Traveler", "the Roadwise", "the Far-Flung", "the Steadfast",
+    "the Wanderer",
+    "the Traveler",
+    "the Roadwise",
+    "the Far-Flung",
+    "the Steadfast",
 ];
 const EPITHET_FOUNDER: &[&str] = &[
-    "the Founder", "the Builder", "the Founder-of-Hearth", "the Steadfast",
+    "the Founder",
+    "the Builder",
+    "the Founder-of-Hearth",
+    "the Steadfast",
 ];
 const EPITHET_SURVIVOR: &[&str] = &[
-    "the Unbroken", "the Survivor", "the Undying", "the Ash-Walker",
+    "the Unbroken",
+    "the Survivor",
+    "the Undying",
+    "the Ash-Walker",
 ];
 
 /// Pick an epithet based on the agent's dominant deed. Uses the agent's id
@@ -271,14 +285,14 @@ fn record_skill_milestone(
 }
 
 const FIRST_NAMES: &[&str] = &[
-    "Elara", "Bran", "Cael", "Dara", "Eryn", "Fenn", "Gwyn", "Halla", "Ivor", "Jora",
-    "Kiran", "Lyra", "Maren", "Nyx", "Oren", "Perrin", "Quill", "Rhea", "Soren", "Tamsin",
-    "Ulric", "Vesna", "Wyl", "Xan", "Yarrow", "Zephyr", "Alden", "Briar", "Corin", "Doran",
-    "Eira", "Faye", "Gale", "Hollis", "Isolde", "Jareth", "Kestrel", "Linnea", "Merrick", "Nerys",
-    "Osric", "Piran", "Rowan", "Saela", "Torren", "Una", "Vale", "Wren", "Yves", "Zinna",
-    "Astra", "Bryn", "Caden", "Delia", "Emric", "Fable", "Garrick", "Hale", "Indra", "Joren",
-    "Kael", "Lune", "Mira", "Nolan", "Orla", "Phelan", "Rune", "Sable", "Thane", "Ursa",
-    "Varen", "Willa", "Yorick", "Zara",
+    "Elara", "Bran", "Cael", "Dara", "Eryn", "Fenn", "Gwyn", "Halla", "Ivor", "Jora", "Kiran",
+    "Lyra", "Maren", "Nyx", "Oren", "Perrin", "Quill", "Rhea", "Soren", "Tamsin", "Ulric", "Vesna",
+    "Wyl", "Xan", "Yarrow", "Zephyr", "Alden", "Briar", "Corin", "Doran", "Eira", "Faye", "Gale",
+    "Hollis", "Isolde", "Jareth", "Kestrel", "Linnea", "Merrick", "Nerys", "Osric", "Piran",
+    "Rowan", "Saela", "Torren", "Una", "Vale", "Wren", "Yves", "Zinna", "Astra", "Bryn", "Caden",
+    "Delia", "Emric", "Fable", "Garrick", "Hale", "Indra", "Joren", "Kael", "Lune", "Mira",
+    "Nolan", "Orla", "Phelan", "Rune", "Sable", "Thane", "Ursa", "Varen", "Willa", "Yorick",
+    "Zara",
 ];
 
 pub fn pick_name(rng: &mut ChaCha8Rng) -> String {
@@ -334,8 +348,7 @@ pub fn step_agents(
                 if let Some(t) = world.tile_mut(agent.col, agent.row) {
                     let bite = (BITE_SIZE * bonus).min(t.food);
                     t.food -= bite;
-                    t.fertility =
-                        (t.fertility - FERTILITY_PER_BITE * (bite / BITE_SIZE)).max(0.0);
+                    t.fertility = (t.fertility - FERTILITY_PER_BITE * (bite / BITE_SIZE)).max(0.0);
                     agent.hunger = (agent.hunger - bite * FOOD_TO_HUNGER).max(0.0);
                 }
                 let _ = grow_skill(&mut agent.skills.foraging, FORAGING_GROWTH);
@@ -361,8 +374,7 @@ pub fn step_agents(
                 });
                 let far_from_home = match (agent.is_warrior(), home) {
                     (true, Some((hc, hr))) => {
-                        world.hex_distance((agent.col, agent.row), (hc, hr))
-                            > WARRIOR_PATROL_RADIUS
+                        world.hex_distance((agent.col, agent.row), (hc, hr)) > WARRIOR_PATROL_RADIUS
                     }
                     _ => false,
                 };
@@ -397,7 +409,10 @@ pub fn step_agents(
             // Settled foragers gather surplus for the stockpile.
             if agent.hunger < 30.0 {
                 if let Some(sid) = agent.settlement {
-                    let tile_food = world.tile(agent.col, agent.row).map(|t| t.food).unwrap_or(0.0);
+                    let tile_food = world
+                        .tile(agent.col, agent.row)
+                        .map(|t| t.food)
+                        .unwrap_or(0.0);
                     if tile_food >= 1.0 {
                         let gather = 0.5_f32.min(tile_food - 0.5);
                         if gather > 0.0 {
@@ -419,10 +434,7 @@ pub fn step_agents(
                                 agent.last_skill_event_year = Some(tick / TICKS_PER_YEAR);
                                 chronicle.record(Event::new(
                                     tick,
-                                    format!(
-                                        "{} grows masterful at finding food.",
-                                        agent.name
-                                    ),
+                                    format!("{} grows masterful at finding food.", agent.name),
                                 ));
                             }
                         }
@@ -454,7 +466,11 @@ pub fn step_agents(
                 .settlement
                 .and_then(|sid| settlements.list.iter().find(|s| s.id == sid))
                 .map_or(false, |s| s.religion.is_some());
-            let damage = if faith_bonus { STARVE_DAMAGE * 0.8 } else { STARVE_DAMAGE };
+            let damage = if faith_bonus {
+                STARVE_DAMAGE * 0.8
+            } else {
+                STARVE_DAMAGE
+            };
             agent.health -= damage;
         } else if agent.health < 100.0 && agent.hunger < 40.0 {
             agent.health = (agent.health + 0.5).min(100.0);
@@ -563,13 +579,15 @@ fn step_merchant(
         agent.hunger = (agent.hunger - bite * FOOD_TO_HUNGER).max(0.0);
     } else if agent.hunger >= HUNGER_STARVE_THRESHOLD {
         // Desperate: try to eat from the ground.
-        let tile_food = world.tile(agent.col, agent.row).map(|t| t.food).unwrap_or(0.0);
+        let tile_food = world
+            .tile(agent.col, agent.row)
+            .map(|t| t.food)
+            .unwrap_or(0.0);
         if tile_food >= 0.5 {
             if let Some(t) = world.tile_mut(agent.col, agent.row) {
                 let bite = BITE_SIZE.min(t.food);
                 t.food -= bite;
-                t.fertility =
-                    (t.fertility - FERTILITY_PER_BITE * (bite / BITE_SIZE)).max(0.0);
+                t.fertility = (t.fertility - FERTILITY_PER_BITE * (bite / BITE_SIZE)).max(0.0);
                 agent.hunger = (agent.hunger - bite * FOOD_TO_HUNGER).max(0.0);
             }
         }
@@ -638,19 +656,13 @@ fn step_merchant(
                     if road_formed {
                         chronicle.record(Event::new(
                             tick,
-                            format!(
-                                "A trade road forms between {} and {}.",
-                                origin_name, dname
-                            ),
+                            format!("A trade road forms between {} and {}.", origin_name, dname),
                         ));
                     }
                     if alliance_formed {
                         chronicle.record(Event::new(
                             tick,
-                            format!(
-                                "{} and {} pledge mutual defense.",
-                                origin_name, dname
-                            ),
+                            format!("{} and {} pledge mutual defense.", origin_name, dname),
                         ));
                     }
                     // Trait emergence: check both endpoints after the trade.
@@ -673,8 +685,7 @@ fn step_merchant(
                     agent.settlement = Some(dest_id);
                     agent.deeds.deliveries += 1;
                     if grow_skill(&mut agent.skills.trading, TRADING_GROWTH) {
-                        let line =
-                            format!("{} has become a trusted merchant.", agent.name);
+                        let line = format!("{} has become a trusted merchant.", agent.name);
                         record_skill_milestone(agent, chronicle, tick, line);
                     }
                     // Religion spread — a small per-trade chance that the
@@ -682,12 +693,14 @@ fn step_merchant(
                     // when the destination has no religion of its own (no
                     // stacking) and the origin does.
                     if let Some(oid) = origin_id {
-                        try_spread_religion(
-                            settlements, oid, dest_id, rng, chronicle, tick,
-                        );
+                        try_spread_religion(settlements, oid, dest_id, rng, chronicle, tick);
                     }
                 } else {
-                    move_agent_to(world, agent, step_toward(world, agent.col, agent.row, dc, dr));
+                    move_agent_to(
+                        world,
+                        agent,
+                        step_toward(world, agent.col, agent.row, dc, dr),
+                    );
                 }
             }
             None => {
@@ -755,8 +768,9 @@ fn find_nearby_food(world: &World, col: i32, row: i32, radius: i32) -> Option<(i
 /// flat neighbor is equally good.
 fn step_toward(world: &World, col: i32, row: i32, tc: i32, tr: i32) -> (i32, i32) {
     let cur = world.hex_distance((col, row), (tc, tr));
-    let cur_mountain =
-        world.tile(col, row).map_or(false, |t| t.biome == Biome::Mountains);
+    let cur_mountain = world
+        .tile(col, row)
+        .map_or(false, |t| t.biome == Biome::Mountains);
     let mut best = (col, row);
     let mut best_score: (i32, u8) = (cur, if cur_mountain { 1 } else { 0 });
     for (nc, nr) in world.neighbors(col, row) {
@@ -764,8 +778,9 @@ fn step_toward(world: &World, col: i32, row: i32, tc: i32, tr: i32) -> (i32, i32
             continue;
         }
         let d = world.hex_distance((nc, nr), (tc, tr));
-        let is_mountain =
-            world.tile(nc, nr).map_or(false, |t| t.biome == Biome::Mountains);
+        let is_mountain = world
+            .tile(nc, nr)
+            .map_or(false, |t| t.biome == Biome::Mountains);
         let score = (d, if is_mountain { 1 } else { 0 });
         if score < best_score {
             best_score = score;
@@ -793,7 +808,9 @@ fn wander(world: &World, col: i32, row: i32, rng: &mut ChaCha8Rng) -> (i32, i32)
         .iter()
         .copied()
         .filter(|&(c, r)| {
-            world.tile(c, r).map_or(true, |t| t.biome != Biome::Mountains)
+            world
+                .tile(c, r)
+                .map_or(true, |t| t.biome != Biome::Mountains)
         })
         .collect();
     let pool = if flat.is_empty() { &passable } else { &flat };

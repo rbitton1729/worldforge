@@ -6,11 +6,11 @@ pub mod tui;
 pub mod world;
 pub mod worldgen;
 
-use agent::{alive_count, seed_agents, step_agents, Agent};
+use agent::{Agent, alive_count, seed_agents, step_agents};
 use chronicle::{Chronicle, Event};
-use rand_chacha::ChaCha8Rng;
 use rand::SeedableRng;
-use settlement::{update_settlements, Dialects, Settlements};
+use rand_chacha::ChaCha8Rng;
+use settlement::{Dialects, Settlements, update_settlements};
 use std::time::{Duration, Instant};
 use world::{Biome, World};
 

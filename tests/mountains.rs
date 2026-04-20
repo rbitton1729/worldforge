@@ -1,6 +1,6 @@
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use worldforge::agent::{step_agents, Agent, MOUNTAIN_MOVE_HUNGER};
+use worldforge::agent::{Agent, MOUNTAIN_MOVE_HUNGER, step_agents};
 use worldforge::chronicle::Chronicle;
 use worldforge::settlement::Settlements;
 use worldforge::world::{Biome, World};
@@ -85,7 +85,14 @@ fn hunger_delta_stepping_onto(target_biome: Biome) -> f32 {
     let mut settlements = Settlements::new();
     let mut rng = ChaCha8Rng::seed_from_u64(1);
     let mut chronicle = sink_chronicle(&format!("mtn-{:?}", target_biome));
-    step_agents(&mut agents, &mut w, &mut settlements, &mut rng, &mut chronicle, 1);
+    step_agents(
+        &mut agents,
+        &mut w,
+        &mut settlements,
+        &mut rng,
+        &mut chronicle,
+        1,
+    );
 
     assert_eq!(
         (agents[0].col, agents[0].row),

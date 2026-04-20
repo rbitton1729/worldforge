@@ -1,6 +1,6 @@
-use worldforge::world::{Biome, World};
 use worldforge::chronicle::Chronicle;
-use worldforge::{run_simulation, SimConfig};
+use worldforge::world::{Biome, World};
+use worldforge::{SimConfig, run_simulation};
 
 /// Find a plains tile at full fertility, not adjacent to a river (so the
 /// river bonus doesn't perturb the test). Returns (col, row).

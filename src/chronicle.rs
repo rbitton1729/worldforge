@@ -89,7 +89,7 @@ impl Event {
 pub struct Chronicle {
     writer: Box<dyn Write>,
     pending: Vec<Event>,
-    last_header: Option<(u64, u64)>, // (year, season_index)
+    last_header: Option<(u64, u64)>,      // (year, season_index)
     header_stats: Option<(usize, usize)>, // (alive souls, alive settlements)
     color: bool,
     last_foraging_milestone_year: Option<u64>,
@@ -200,10 +200,7 @@ impl Chronicle {
                     "--- Year {}, {} — {} souls across {} settlements ---",
                     year, SEASONS[season_idx as usize], souls, settlements
                 ),
-                None => format!(
-                    "--- Year {}, {} ---",
-                    year, SEASONS[season_idx as usize]
-                ),
+                None => format!("--- Year {}, {} ---", year, SEASONS[season_idx as usize]),
             };
             writeln!(self.writer)?;
             self.write_colored(&header)?;

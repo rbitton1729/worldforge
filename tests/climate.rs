@@ -1,6 +1,4 @@
-use worldforge::world::{
-    World, CLIMATE_DRIFT_MAX, CLIMATE_DRIFT_MIN,
-};
+use worldforge::world::{CLIMATE_DRIFT_MAX, CLIMATE_DRIFT_MIN, World};
 
 #[test]
 fn climate_drift_stays_in_range_over_2000_ticks() {

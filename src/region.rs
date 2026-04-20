@@ -172,9 +172,7 @@ pub fn detect_regions(
             let r = (i / width as usize) as i32;
             for (nc, nr) in hex_neighbors(c, r) {
                 if let Some(ni) = tile_idx(nc, nr, width, height) {
-                    if cluster_id[ni].is_none()
-                        && biome_group(tiles[ni].biome) == Some(group)
-                    {
+                    if cluster_id[ni].is_none() && biome_group(tiles[ni].biome) == Some(group) {
                         cluster_id[ni] = Some(cid);
                         queue.push_back(ni);
                     }
@@ -219,12 +217,7 @@ pub fn detect_regions(
 }
 
 /// Split a too-large cluster into roughly-balanced sub-clusters by seeded BFS.
-fn split_cluster(
-    members: &[usize],
-    width: u32,
-    height: u32,
-    cap: usize,
-) -> Vec<Vec<usize>> {
+fn split_cluster(members: &[usize], width: u32, height: u32, cap: usize) -> Vec<Vec<usize>> {
     let n_chunks = (members.len() + cap - 1) / cap;
     if n_chunks <= 1 {
         return vec![members.to_vec()];

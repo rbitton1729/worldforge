@@ -1,15 +1,14 @@
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use worldforge::agent::{
-    seed_agents, step_agents, Agent, FORAGING_GROWTH, MERCHANT_DISPATCH_THRESHOLD,
-    ROLE_RECOGNITION_THRESHOLD, SEED_FIGHTING_BIAS_MAX, SEED_FIGHTING_BIAS_MIN,
-    SEED_SKILL_BIAS_MAX, SKILL_BASELINE, SKILL_DECAY, TRADING_GROWTH,
-    WARRIOR_RECOGNITION_THRESHOLD,
+    Agent, FORAGING_GROWTH, MERCHANT_DISPATCH_THRESHOLD, ROLE_RECOGNITION_THRESHOLD,
+    SEED_FIGHTING_BIAS_MAX, SEED_FIGHTING_BIAS_MIN, SEED_SKILL_BIAS_MAX, SKILL_BASELINE,
+    SKILL_DECAY, TRADING_GROWTH, WARRIOR_RECOGNITION_THRESHOLD, seed_agents, step_agents,
 };
 use worldforge::chronicle::Chronicle;
-use worldforge::settlement::{update_settlements, Settlements};
+use worldforge::settlement::{Settlements, update_settlements};
 use worldforge::world::{Biome, World};
-use worldforge::{run_simulation, SimConfig};
+use worldforge::{SimConfig, run_simulation};
 
 fn sink_chronicle(tag: &str) -> Chronicle {
     Chronicle::to_file(
@@ -116,9 +115,7 @@ fn foraging_grows_when_an_agent_eats() {
     let mut found: Option<(i32, i32)> = None;
     'outer: for row in 1..(w.height as i32 - 1) {
         for col in 1..(w.width as i32 - 1) {
-            if w.tile(col, row)
-                .map_or(false, |t| t.biome == Biome::Plains)
-            {
+            if w.tile(col, row).map_or(false, |t| t.biome == Biome::Plains) {
                 found = Some((col, row));
                 break 'outer;
             }
@@ -138,7 +135,14 @@ fn foraging_grows_when_an_agent_eats() {
     let mut settlements = Settlements::new();
     let mut rng = ChaCha8Rng::seed_from_u64(1);
     let mut chronicle = sink_chronicle("forage-grows");
-    step_agents(&mut agents, &mut w, &mut settlements, &mut rng, &mut chronicle, 1);
+    step_agents(
+        &mut agents,
+        &mut w,
+        &mut settlements,
+        &mut rng,
+        &mut chronicle,
+        1,
+    );
 
     let after = &agents[0];
     assert!(
@@ -174,10 +178,7 @@ fn skills_decay_over_time_when_unused() {
                 let nb = w.neighbors(col, row);
                 let all_mtn = nb
                     .iter()
-                    .all(|&(nc, nr)| {
-                        w.tile(nc, nr)
-                            .map_or(true, |t| t.biome == Biome::Mountains)
-                    });
+                    .all(|&(nc, nr)| w.tile(nc, nr).map_or(true, |t| t.biome == Biome::Mountains));
                 if all_mtn {
                     found = Some((col, row));
                     break 'outer;
@@ -209,7 +210,14 @@ fn skills_decay_over_time_when_unused() {
     let mut rng = ChaCha8Rng::seed_from_u64(1);
     let mut chronicle = sink_chronicle("decay");
     for tick in 1..=200u64 {
-        step_agents(&mut agents, &mut w, &mut settlements, &mut rng, &mut chronicle, tick);
+        step_agents(
+            &mut agents,
+            &mut w,
+            &mut settlements,
+            &mut rng,
+            &mut chronicle,
+            tick,
+        );
         if !agents[0].alive {
             break;
         }
@@ -239,9 +247,7 @@ fn settlement_does_not_dispatch_without_skilled_trader() {
     let mut origin: Option<(i32, i32)> = None;
     'outer: for row in 5..(w.height as i32 - 5) {
         for col in 5..(w.width as i32 - 5) {
-            if w.tile(col, row)
-                .map_or(false, |t| t.biome == Biome::Plains)
-            {
+            if w.tile(col, row).map_or(false, |t| t.biome == Biome::Plains) {
                 origin = Some((col, row));
                 break 'outer;
             }
@@ -284,9 +290,7 @@ fn settlement_does_not_dispatch_without_skilled_trader() {
             if (col - oc).abs() + (row - or).abs() < 12 {
                 continue;
             }
-            if w.tile(col, row)
-                .map_or(false, |t| t.biome == Biome::Plains)
-            {
+            if w.tile(col, row).map_or(false, |t| t.biome == Biome::Plains) {
                 far_origin = Some((col, row));
                 break 'outer2;
             }
@@ -333,9 +337,7 @@ fn settlement_dispatches_skilled_trader_when_one_exists() {
     let mut origin: Option<(i32, i32)> = None;
     'outer: for row in 5..(w.height as i32 - 5) {
         for col in 5..(w.width as i32 - 5) {
-            if w.tile(col, row)
-                .map_or(false, |t| t.biome == Biome::Plains)
-            {
+            if w.tile(col, row).map_or(false, |t| t.biome == Biome::Plains) {
                 origin = Some((col, row));
                 break 'outer;
             }
@@ -367,9 +369,7 @@ fn settlement_dispatches_skilled_trader_when_one_exists() {
             if (col - oc).abs() + (row - or).abs() < 12 {
                 continue;
             }
-            if w.tile(col, row)
-                .map_or(false, |t| t.biome == Biome::Plains)
-            {
+            if w.tile(col, row).map_or(false, |t| t.biome == Biome::Plains) {
                 far_origin = Some((col, row));
                 break 'outer2;
             }

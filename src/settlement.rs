@@ -242,10 +242,7 @@ impl Settlement {
         }
         if self.trades_completed >= TRAIT_TRADES_THRESHOLD {
             self.trait_kind = Some(Trait::Mercantile);
-            return Some(format!(
-                "{} becomes known as a haven of trade.",
-                self.name
-            ));
+            return Some(format!("{} becomes known as a haven of trade.", self.name));
         }
         None
     }
@@ -598,7 +595,15 @@ pub fn update_settlements(
     let members_by_settlement = build_members_map(agents);
 
     // Raids between settlements.
-    raid_phase(settlements, agents, &members_by_settlement, world, rng, chronicle, tick);
+    raid_phase(
+        settlements,
+        agents,
+        &members_by_settlement,
+        world,
+        rng,
+        chronicle,
+        tick,
+    );
 
     // Trade dispatch: settlements with surplus pick a skilled trader to send.
     try_dispatch_merchants(settlements, agents, &members_by_settlement, rng);
@@ -697,7 +702,10 @@ pub fn update_settlements(
             s.alive = false;
             chronicle.record(Event::new(
                 tick,
-                format!("{} is abandoned. The wind moves through empty halls.", s.name),
+                format!(
+                    "{} is abandoned. The wind moves through empty halls.",
+                    s.name
+                ),
             ));
         }
         if pop > s.population_peak {
@@ -763,11 +771,7 @@ pub fn update_settlements(
 /// threshold but haven't been given an epithet yet. Each agent earns at most
 /// one epithet in their lifetime. The chronicle line includes their name with
 /// the epithet and a brief description of what earned it.
-fn recognize_great_individuals(
-    agents: &mut [Agent],
-    chronicle: &mut Chronicle,
-    tick: u64,
-) {
+fn recognize_great_individuals(agents: &mut [Agent], chronicle: &mut Chronicle, tick: u64) {
     use crate::agent::choose_epithet;
     for agent in agents.iter_mut() {
         if !agent.alive || agent.epithet.is_some() {
@@ -781,10 +785,7 @@ fn recognize_great_individuals(
         agent.epithet = Some(epithet.to_string());
         chronicle.record(Event::new(
             tick,
-            format!(
-                "*** {} {} — {} ***",
-                agent.name, epithet, reason
-            ),
+            format!("*** {} {} — {} ***", agent.name, epithet, reason),
         ));
     }
 }
@@ -898,7 +899,11 @@ fn migrate_from_starving(
         }
 
         let n = leavers.len();
-        let noun = if n == 1 { "soul departs" } else { "souls depart" };
+        let noun = if n == 1 {
+            "soul departs"
+        } else {
+            "souls depart"
+        };
         chronicle.record(Event::new(
             tick,
             format!("{} {} the starving halls of {}.", n, noun, sname),
@@ -1222,7 +1227,11 @@ fn raid_phase(
             .find(|s| s.id == raider_id)
             .map(|s| {
                 (
-                    s.routes.iter().filter(|r| r.allied).map(|r| r.other_id).collect(),
+                    s.routes
+                        .iter()
+                        .filter(|r| r.allied)
+                        .map(|r| r.other_id)
+                        .collect(),
                     s.enmities.iter().map(|e| e.other_id).collect(),
                 )
             })
@@ -1283,7 +1292,9 @@ fn raid_phase(
                 .map(|s| s.id)
         });
 
-        let Some(target_id) = target_opt else { continue };
+        let Some(target_id) = target_opt else {
+            continue;
+        };
 
         let own_defenders = count_warriors(agents, members_by_settlement, target_id);
         let own_defender_strength = warrior_strength(agents, members_by_settlement, target_id);
@@ -1292,7 +1303,13 @@ fn raid_phase(
             .list
             .iter()
             .find(|s| s.id == target_id)
-            .map(|s| s.routes.iter().filter(|r| r.allied).map(|r| r.other_id).collect())
+            .map(|s| {
+                s.routes
+                    .iter()
+                    .filter(|r| r.allied)
+                    .map(|r| r.other_id)
+                    .collect()
+            })
             .unwrap_or_default();
         let ally_defenders: u32 = target_allies
             .iter()
@@ -1361,17 +1378,18 @@ fn raid_phase(
                 (loot, t.col, t.row)
             };
             slay_warriors(agents, members_by_settlement, target_id, defenders);
-            // Surviving civilians of target lose affiliation. Their skills
-            // travel with them — wherever they end up, they remember.
+            // Conquest: surviving civilians are absorbed into the conquering
+            // settlement rather than scattered. Their skills travel with them.
+            let mut absorbed: u32 = 0;
             if let Some(list) = members_by_settlement.get(&target_id) {
                 for &i in list {
                     let a = &mut agents[i];
                     if a.alive && a.settlement == Some(target_id) {
-                        a.deeds.survived_sack = true;
-                        a.settlement = None;
+                        a.settlement = Some(raider_id);
                         a.cargo = 0.0;
                         a.cargo_origin = None;
                         a.destination = None;
+                        absorbed += 1;
                     }
                 }
             }
@@ -1380,17 +1398,18 @@ fn raid_phase(
             slay_warriors(agents, members_by_settlement, raider_id, atk_losses);
             if let Some(r) = settlements.list.iter_mut().find(|s| s.id == raider_id) {
                 r.stockpile += loot;
+                r.population = r.population.saturating_add(absorbed);
             }
             chronicle.record(Event::new(
                 tick,
                 format!(
-                    "{} is put to the torch. The smoke rises above empty fields.",
-                    target_name
+                    "{} is conquered. {} souls bend the knee to {}.",
+                    target_name, absorbed, raider_name
                 ),
             ));
             chronicle.record(Event::new(
                 tick,
-                format!("*** The Fall of {} ***", target_name),
+                format!("*** The Conquest of {} ***", target_name),
             ));
             let _ = (t_col, t_row);
             // Record enmity on raider (target is gone).
@@ -1473,8 +1492,22 @@ fn raid_phase(
         // call. Defenders of the target also include non-warriors — the
         // raid was at their doorstep, so civilians learn to fight too, and
         // this is the hook that bootstraps new warriors.
-        grant_combat_experience(agents, members_by_settlement, raider_id, true, chronicle, tick);
-        grant_combat_experience(agents, members_by_settlement, target_id, false, chronicle, tick);
+        grant_combat_experience(
+            agents,
+            members_by_settlement,
+            raider_id,
+            true,
+            chronicle,
+            tick,
+        );
+        grant_combat_experience(
+            agents,
+            members_by_settlement,
+            target_id,
+            false,
+            chronicle,
+            tick,
+        );
         for &aid in &target_allies {
             grant_combat_experience(agents, members_by_settlement, aid, true, chronicle, tick);
         }
@@ -1694,7 +1727,11 @@ fn religion_patron(kind: ReligionKind) -> &'static str {
 
 /// Chronicle line announcing a new faith. Rendered with *** markers so the
 /// TUI and stdout colorizer both promote it to a highlighted event.
-fn religion_emergence_line(settlement_name: &str, kind: ReligionKind, religion_name: &str) -> String {
+fn religion_emergence_line(
+    settlement_name: &str,
+    kind: ReligionKind,
+    religion_name: &str,
+) -> String {
     format!(
         "*** The people of {} begin to worship {} — {} ***",
         settlement_name,
@@ -1728,11 +1765,7 @@ pub fn try_spread_religion(
         .list
         .iter()
         .find(|s| s.id == origin_id && s.alive)
-        .and_then(|s| {
-            s.religion
-                .as_ref()
-                .map(|r| (s.name.clone(), r.clone()))
-        });
+        .and_then(|s| s.religion.as_ref().map(|r| (s.name.clone(), r.clone())));
     let Some((origin_name, origin_religion)) = origin_info else {
         return;
     };
@@ -1831,7 +1864,9 @@ pub struct Dialects {
 
 impl Dialects {
     pub fn empty() -> Self {
-        Self { centers: Vec::new() }
+        Self {
+            centers: Vec::new(),
+        }
     }
 
     /// Scatter 3–6 language centers across the world's land tiles with a
@@ -2096,7 +2131,10 @@ mod tests {
         for _ in 0..5000 {
             assert!(s.maybe_emerge_religion(&world, &mut rng, tick).is_none());
         }
-        assert_eq!(s.religion.as_ref().unwrap().kind, ReligionKind::HarvestCovenant);
+        assert_eq!(
+            s.religion.as_ref().unwrap().kind,
+            ReligionKind::HarvestCovenant
+        );
     }
 
     #[test]

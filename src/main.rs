@@ -1,7 +1,7 @@
 use clap::Parser;
 use rand::Rng;
 use worldforge::chronicle::Chronicle;
-use worldforge::{run_simulation, tui, SimConfig};
+use worldforge::{SimConfig, run_simulation, tui};
 
 #[derive(Parser, Debug)]
 #[command(
