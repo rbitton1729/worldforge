@@ -51,6 +51,28 @@ pub struct Enmity {
     pub blood_feud: bool,
 }
 
+/// An ongoing multi-season conflict between two settlements, opened the moment
+/// their enmity hardens into a blood feud. Casualty totals track per side:
+/// `total_atk_casualties` is cumulative losses on `side_a` (the first
+/// aggressor), `total_def_casualties` on `side_b`.
+#[derive(Debug, Clone)]
+pub struct War {
+    pub war_id: u32,
+    pub side_a: u32,
+    pub side_b: u32,
+    pub started_tick: u64,
+    pub battle_count: u32,
+    pub total_atk_casualties: u32,
+    pub total_def_casualties: u32,
+    pub side_a_start_warriors: u32,
+    pub side_b_start_warriors: u32,
+    pub tide_turned_a: bool,
+    pub tide_turned_b: bool,
+}
+
+const WAR_TIDE_FRACTION: f32 = 0.60;
+const WAR_RAGE_EVERY_N_BATTLES: u32 = 3;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Trait {
     Militant,
@@ -406,6 +428,8 @@ pub struct Settlements {
     pub list: Vec<Settlement>,
     next_id: u32,
     pub dialects: Dialects,
+    pub wars: Vec<War>,
+    next_war_id: u32,
 }
 
 impl Settlements {
@@ -414,6 +438,8 @@ impl Settlements {
             list: Vec::new(),
             next_id: 0,
             dialects: Dialects::empty(),
+            wars: Vec::new(),
+            next_war_id: 0,
         }
     }
 
@@ -604,6 +630,10 @@ pub fn update_settlements(
         chronicle,
         tick,
     );
+
+    // Retire any wars that ended this tick — conquests, sues-for-peace, and
+    // silent cleanups when a belligerent vanished for unrelated reasons.
+    check_war_status(settlements, agents, chronicle, tick);
 
     // Trade dispatch: settlements with surplus pick a skilled trader to send.
     try_dispatch_merchants(settlements, agents, &members_by_settlement, rng);
@@ -1125,6 +1155,243 @@ fn resolve_raid_outcome(
                 raider_name, target_name
             ),
         ));
+        start_war(
+            settlements,
+            agents,
+            members_by_settlement,
+            raider_id,
+            target_id,
+            raider_name,
+            target_name,
+            chronicle,
+            tick,
+        );
+    }
+
+    note_war_battle(
+        settlements,
+        raider_id,
+        target_id,
+        atk_losses,
+        def_losses,
+        chronicle,
+        tick,
+    );
+}
+
+/// Declare an open war between `side_a` (the first aggressor) and `side_b`,
+/// unless one already exists between the pair. Records the starting warrior
+/// counts so later "tide turns" checks compare against a fixed baseline.
+fn start_war(
+    settlements: &mut Settlements,
+    agents: &[Agent],
+    members_by_settlement: &HashMap<u32, Vec<usize>>,
+    side_a: u32,
+    side_b: u32,
+    side_a_name: &str,
+    side_b_name: &str,
+    chronicle: &mut Chronicle,
+    tick: u64,
+) {
+    let exists = settlements.wars.iter().any(|w| {
+        (w.side_a == side_a && w.side_b == side_b)
+            || (w.side_a == side_b && w.side_b == side_a)
+    });
+    if exists {
+        return;
+    }
+    let side_a_start = count_warriors(agents, members_by_settlement, side_a);
+    let side_b_start = count_warriors(agents, members_by_settlement, side_b);
+    let war_id = settlements.next_war_id;
+    settlements.next_war_id += 1;
+    settlements.wars.push(War {
+        war_id,
+        side_a,
+        side_b,
+        started_tick: tick,
+        battle_count: 0,
+        total_atk_casualties: 0,
+        total_def_casualties: 0,
+        side_a_start_warriors: side_a_start,
+        side_b_start_warriors: side_b_start,
+        tide_turned_a: false,
+        tide_turned_b: false,
+    });
+    chronicle.record(Event::new(
+        tick,
+        format!("War breaks out between {} and {}.", side_a_name, side_b_name),
+    ));
+}
+
+/// Record one more battle in any war that exists between `raider` and
+/// `target`. Casualties on whichever side is the war's original aggressor
+/// (`side_a`) flow into `total_atk_casualties`; the other side's losses into
+/// `total_def_casualties`, so the counters remain comparable across
+/// retaliations. Emits the "rages on" milestone every third battle.
+fn note_war_battle(
+    settlements: &mut Settlements,
+    raider_id: u32,
+    target_id: u32,
+    atk_losses: u32,
+    def_losses: u32,
+    chronicle: &mut Chronicle,
+    tick: u64,
+) {
+    let Some(idx) = settlements.wars.iter().position(|w| {
+        (w.side_a == raider_id && w.side_b == target_id)
+            || (w.side_a == target_id && w.side_b == raider_id)
+    }) else {
+        return;
+    };
+    let (battle_count, milestone, side_a_id, side_b_id) = {
+        let war = &mut settlements.wars[idx];
+        war.battle_count += 1;
+        if raider_id == war.side_a {
+            war.total_atk_casualties = war.total_atk_casualties.saturating_add(atk_losses);
+            war.total_def_casualties = war.total_def_casualties.saturating_add(def_losses);
+        } else {
+            war.total_atk_casualties = war.total_atk_casualties.saturating_add(def_losses);
+            war.total_def_casualties = war.total_def_casualties.saturating_add(atk_losses);
+        }
+        let milestone = war.battle_count % WAR_RAGE_EVERY_N_BATTLES == 0;
+        (war.battle_count, milestone, war.side_a, war.side_b)
+    };
+    if milestone {
+        let name_a = settlements
+            .list
+            .iter()
+            .find(|s| s.id == side_a_id)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
+        let name_b = settlements
+            .list
+            .iter()
+            .find(|s| s.id == side_b_id)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
+        chronicle.record(Event::new(
+            tick,
+            format!(
+                "The war between {} and {} rages on. {} battles have been fought.",
+                name_a, name_b, battle_count
+            ),
+        ));
+    }
+}
+
+/// Walk the active wars and retire any that have run their course. Wars end
+/// when one belligerent is dead (conquest), when one has no warriors left to
+/// field (sue for peace), or on a silent fallback when both sides are gone.
+/// Also emits the one-shot "tide turns" line once a side's cumulative
+/// casualties cross [`WAR_TIDE_FRACTION`] of its starting muster.
+fn check_war_status(
+    settlements: &mut Settlements,
+    agents: &[Agent],
+    chronicle: &mut Chronicle,
+    tick: u64,
+) {
+    if settlements.wars.is_empty() {
+        return;
+    }
+    let members_by_settlement = build_members_map(agents);
+    let mut remove_indices: Vec<usize> = Vec::new();
+
+    for i in 0..settlements.wars.len() {
+        let war = settlements.wars[i].clone();
+        let side_a = &settlements
+            .list
+            .iter()
+            .find(|s| s.id == war.side_a)
+            .map(|s| (s.name.clone(), s.alive));
+        let side_b = &settlements
+            .list
+            .iter()
+            .find(|s| s.id == war.side_b)
+            .map(|s| (s.name.clone(), s.alive));
+        let (a_name, a_alive) = match side_a {
+            Some(x) => (x.0.clone(), x.1),
+            None => (String::new(), false),
+        };
+        let (b_name, b_alive) = match side_b {
+            Some(x) => (x.0.clone(), x.1),
+            None => (String::new(), false),
+        };
+
+        if !a_alive || !b_alive {
+            if a_alive && !b_alive {
+                chronicle.record(Event::new(
+                    tick,
+                    format!(
+                        "The war between {} and {} ends with {}'s conquest of {}.",
+                        a_name, b_name, a_name, b_name
+                    ),
+                ));
+            } else if !a_alive && b_alive {
+                chronicle.record(Event::new(
+                    tick,
+                    format!(
+                        "The war between {} and {} ends with {}'s conquest of {}.",
+                        a_name, b_name, b_name, a_name
+                    ),
+                ));
+            }
+            remove_indices.push(i);
+            continue;
+        }
+
+        let a_warriors = count_warriors(agents, &members_by_settlement, war.side_a);
+        let b_warriors = count_warriors(agents, &members_by_settlement, war.side_b);
+
+        if a_warriors == 0 {
+            chronicle.record(Event::new(
+                tick,
+                format!("{} sues for peace with {}.", a_name, b_name),
+            ));
+            remove_indices.push(i);
+            continue;
+        }
+        if b_warriors == 0 {
+            chronicle.record(Event::new(
+                tick,
+                format!("{} sues for peace with {}.", b_name, a_name),
+            ));
+            remove_indices.push(i);
+            continue;
+        }
+
+        // Tide-turn: a cumulative threshold, emitted at most once per side.
+        if !war.tide_turned_a
+            && war.side_a_start_warriors > 0
+            && (war.total_atk_casualties as f32) / (war.side_a_start_warriors as f32)
+                >= WAR_TIDE_FRACTION
+        {
+            chronicle.record(Event::new(
+                tick,
+                format!(
+                    "The tide turns against {} in the war with {}.",
+                    a_name, b_name
+                ),
+            ));
+            settlements.wars[i].tide_turned_a = true;
+        }
+        if !war.tide_turned_b
+            && war.side_b_start_warriors > 0
+            && (war.total_def_casualties as f32) / (war.side_b_start_warriors as f32)
+                >= WAR_TIDE_FRACTION
+        {
+            chronicle.record(Event::new(
+                tick,
+                format!(
+                    "The tide turns against {} in the war with {}.",
+                    b_name, a_name
+                ),
+            ));
+            settlements.wars[i].tide_turned_b = true;
+        }
+    }
+
+    for &i in remove_indices.iter().rev() {
+        settlements.wars.remove(i);
     }
 }
 
@@ -1416,6 +1683,17 @@ fn raid_phase(
             if let Some(r) = settlements.list.iter_mut().find(|s| s.id == raider_id) {
                 r.note_raid(target_id);
             }
+            // If a war was underway, this was its decisive battle. The war's
+            // end event fires in check_war_status, which sees side_b dead.
+            note_war_battle(
+                settlements,
+                raider_id,
+                target_id,
+                atk_losses,
+                defenders,
+                chronicle,
+                tick,
+            );
         } else if success {
             // Mark the top warrior of the raider as having led this raid.
             mark_raid_leader(agents, members_by_settlement, raider_id);

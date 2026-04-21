@@ -4,13 +4,13 @@
 The world lives. Agents eat, starve, reproduce, die of old age.
 Settlements form, trade, raid each other, develop traits. The chronicle narrates.
 
-## v0.2.0 — Geography
-- [ ] Rivers (follow elevation to coast, settlements near rivers get food bonus)
-- [ ] Named regions — not just settlements, but the land itself gets names
+## v0.2.0 — Geography ✅
+- [x] Rivers (follow elevation to coast, settlements near rivers get food bonus)
+- [x] Named regions — not just settlements, but the land itself gets names
   ("the Ashlands", "the Velmara Expanse") based on biome clusters
-- [ ] Terrain depletion — forests shrink when over-harvested, fertility drops with overfarming
-- [ ] Climate shifts on long timescales (slow temperature drift, not dramatic events)
-- [ ] Passes through mountains — make mountains traversable but costly
+- [x] Terrain depletion — forests shrink when over-harvested, fertility drops with overfarming
+- [x] Climate shifts on long timescales (slow temperature drift, not dramatic events)
+- [x] Passes through mountains — make mountains traversable but costly
 
 ## v0.3.0 — Culture
 - [x] Great individuals — agents that do exceptional things get named and remembered
@@ -22,11 +22,11 @@ Settlements form, trade, raid each other, develop traits. The chronicle narrates
   ("The people of Calwold begin to worship the river")
 
 ## v0.4.0 — Conflict Deepens
-- [ ] Alliances matter — allied settlements share warriors during raids
+- [x] Alliances matter — allied settlements share warriors during raids
 - [ ] Territory claims — settlements mark borders, crossing them provokes conflict
 - [ ] Sieges — not just raids, but sustained blockades of starving settlements
 - [x] Conquest — victorious settlement absorbs the loser's population
-- [ ] War chronicles — multi-season wars with named battles, retreats, last stands
+- [x] War chronicles — multi-season wars with named battles, retreats, last stands
 
 ## v0.5.0 — Economy Deepens
 - [ ] Trade routes form and persist (merchants prefer established paths)
