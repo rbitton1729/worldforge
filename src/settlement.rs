@@ -30,7 +30,7 @@ const BLOOD_FEUD_THRESHOLD: u32 = 2;
 const RAID_MIN_SETTLEMENT_AGE_TICKS: u64 = 2 * TICKS_PER_YEAR;
 
 /// Minimum loyal / nearby agents required to found a settlement.
-const FOUND_THRESHOLD: usize = 5;
+const FOUND_THRESHOLD: usize = 7;
 /// Radius (in hexes) within which agents count as "together".
 const CLUSTER_RADIUS: i32 = 2;
 /// Don't found a new settlement within this many hexes of an existing one.
@@ -470,10 +470,21 @@ impl Settlements {
         let id = self.next_id;
         self.next_id += 1;
         let dialect_idx = self.dialects.nearest(world, col, row);
-        let name = match dialect_idx {
+        let existing_names: std::collections::HashSet<String> =
+            self.list.iter().map(|s| s.name.clone()).collect();
+        let mut name = match dialect_idx {
             Some(i) => generate_name(rng, Some(&self.dialects.centers[i].dialect)),
             None => generate_name(rng, None),
         };
+        for _ in 0..50 {
+            if !existing_names.contains(&name) {
+                break;
+            }
+            name = match dialect_idx {
+                Some(i) => generate_name(rng, Some(&self.dialects.centers[i].dialect)),
+                None => generate_name(rng, None),
+            };
+        }
         self.list.push(Settlement {
             id,
             name,

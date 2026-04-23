@@ -31,7 +31,7 @@ pub const FIGHTING_PRACTICE_GROWTH: f32 = 0.005;
 pub const TRADING_GROWTH: f32 = 0.02;
 /// Skill at or above which an agent is recognized as a seasoned warrior or
 /// trusted merchant — the milestone emitted in the chronicle.
-pub const ROLE_RECOGNITION_THRESHOLD: f32 = 0.5;
+pub const ROLE_RECOGNITION_THRESHOLD: f32 = 0.6;
 /// Foraging skill at which an agent earns the "grows masterful" chronicle line.
 /// Set above ROLE_RECOGNITION_THRESHOLD so the milestone signals sustained
 /// mastery rather than a one-time crossing — foraging is a universal activity

@@ -257,7 +257,7 @@ fn settlement_does_not_dispatch_without_skilled_trader() {
 
     // Cluster enough agents at this spot to found a settlement, then run one
     // update_settlements tick.
-    let mut agents: Vec<Agent> = (0..6)
+    let mut agents: Vec<Agent> = (0..7)
         .map(|i| Agent::new(i, format!("T{}", i), oc, or, 10_000))
         .collect();
     let mut settlements = Settlements::new();
@@ -297,7 +297,7 @@ fn settlement_does_not_dispatch_without_skilled_trader() {
         }
     }
     let (fc, fr) = far_origin.expect("far plains tile");
-    for i in 6..12 {
+    for i in 7..14 {
         agents.push(Agent::new(i, format!("F{}", i), fc, fr, 10_000));
     }
     update_settlements(
@@ -346,7 +346,7 @@ fn settlement_dispatches_skilled_trader_when_one_exists() {
     let (oc, or) = origin.expect("plains tile");
 
     // Found settlement A.
-    let mut agents: Vec<Agent> = (0..6)
+    let mut agents: Vec<Agent> = (0..7)
         .map(|i| Agent::new(i, format!("T{}", i), oc, or, 10_000))
         .collect();
     let mut settlements = Settlements::new();
@@ -376,7 +376,7 @@ fn settlement_dispatches_skilled_trader_when_one_exists() {
         }
     }
     let (fc, fr) = far_origin.expect("far plains tile");
-    for i in 6..12 {
+    for i in 7..14 {
         agents.push(Agent::new(i, format!("F{}", i), fc, fr, 10_000));
     }
     update_settlements(
