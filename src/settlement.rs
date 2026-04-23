@@ -432,6 +432,12 @@ pub struct Settlements {
     next_war_id: u32,
 }
 
+impl Default for Settlements {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Settlements {
     pub fn new() -> Self {
         Self {
@@ -717,11 +723,10 @@ pub fn update_settlements(
     // Build the count map in one O(n) pass so the per-settlement loop is O(1) each.
     let mut pop_by_settlement: HashMap<u32, u32> = HashMap::new();
     for a in agents.iter() {
-        if a.alive {
-            if let Some(sid) = a.settlement {
+        if a.alive
+            && let Some(sid) = a.settlement {
                 *pop_by_settlement.entry(sid).or_insert(0) += 1;
             }
-        }
     }
     for s in settlements.list.iter_mut() {
         if !s.alive {
@@ -751,8 +756,8 @@ pub fn update_settlements(
         {
             s.in_hardship = true;
             s.hardship_peak = Some(s.population_peak);
-        } else if s.in_hardship {
-            if let Some(pk) = s.hardship_peak {
+        } else if s.in_hardship
+            && let Some(pk) = s.hardship_peak {
                 let recovered = (pk as f32 * HARDSHIP_RECOVER_FACTOR) as u32;
                 if pop >= recovered {
                     s.in_hardship = false;
@@ -760,7 +765,6 @@ pub fn update_settlements(
                     s.booms_after_hardship += 1;
                 }
             }
-        }
         if !s.legend_fifty && pop >= 50 {
             s.legend_fifty = true;
             chronicle.record(Event::new(
@@ -1253,7 +1257,7 @@ fn note_war_battle(
             war.total_atk_casualties = war.total_atk_casualties.saturating_add(def_losses);
             war.total_def_casualties = war.total_def_casualties.saturating_add(atk_losses);
         }
-        let milestone = war.battle_count % WAR_RAGE_EVERY_N_BATTLES == 0;
+        let milestone = war.battle_count.is_multiple_of(WAR_RAGE_EVERY_N_BATTLES);
         (war.battle_count, milestone, war.side_a, war.side_b)
     };
     if milestone {
@@ -1743,11 +1747,10 @@ fn raid_phase(
             ));
             // Holding against a stronger host is a classic seed of protective
             // faith — religious pressure on the target.
-            if attackers > defenders {
-                if let Some(t) = settlements.list.iter_mut().find(|s| s.id == target_id) {
+            if attackers > defenders
+                && let Some(t) = settlements.list.iter_mut().find(|s| s.id == target_id) {
                     t.raids_repelled_vs_odds += 1;
                 }
-            }
             let atk_losses = rng.gen_range(2..=3).min(attackers);
             let def_losses = rng.gen_range(0..=1);
             resolve_raid_outcome(
@@ -1833,11 +1836,10 @@ fn update_land_health(
                 if world.hex_distance((s.col, s.row), (c, r)) > RADIUS {
                     continue;
                 }
-                if let Some(t) = world.tile(c, r) {
-                    if t.biome.natural_fertility() > 0.5 {
+                if let Some(t) = world.tile(c, r)
+                    && t.biome.natural_fertility() > 0.5 {
                         min_fert = min_fert.min(t.fertility);
                     }
-                }
             }
         }
         if !min_fert.is_finite() {
@@ -1876,11 +1878,10 @@ fn near_mountain(world: &World, col: i32, row: i32) -> bool {
             if world.hex_distance((col, row), (c, r)) > CUSTOM_MOUNTAIN_RADIUS {
                 continue;
             }
-            if let Some(t) = world.tile(c, r) {
-                if t.biome == Biome::Mountains {
+            if let Some(t) = world.tile(c, r)
+                && t.biome == Biome::Mountains {
                     return true;
                 }
-            }
         }
     }
     false

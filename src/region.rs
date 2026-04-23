@@ -171,12 +171,11 @@ pub fn detect_regions(
             let c = (i % width as usize) as i32;
             let r = (i / width as usize) as i32;
             for (nc, nr) in hex_neighbors(c, r) {
-                if let Some(ni) = tile_idx(nc, nr, width, height) {
-                    if cluster_id[ni].is_none() && biome_group(tiles[ni].biome) == Some(group) {
+                if let Some(ni) = tile_idx(nc, nr, width, height)
+                    && cluster_id[ni].is_none() && biome_group(tiles[ni].biome) == Some(group) {
                         cluster_id[ni] = Some(cid);
                         queue.push_back(ni);
                     }
-                }
             }
         }
         clusters.push(members);
@@ -218,11 +217,11 @@ pub fn detect_regions(
 
 /// Split a too-large cluster into roughly-balanced sub-clusters by seeded BFS.
 fn split_cluster(members: &[usize], width: u32, height: u32, cap: usize) -> Vec<Vec<usize>> {
-    let n_chunks = (members.len() + cap - 1) / cap;
+    let n_chunks = members.len().div_ceil(cap);
     if n_chunks <= 1 {
         return vec![members.to_vec()];
     }
-    let target = (members.len() + n_chunks - 1) / n_chunks;
+    let target = members.len().div_ceil(n_chunks);
     let member_set: HashSet<usize> = members.iter().copied().collect();
     let mut assigned: HashSet<usize> = HashSet::new();
     let mut chunks: Vec<Vec<usize>> = Vec::new();
@@ -242,12 +241,11 @@ fn split_cluster(members: &[usize], width: u32, height: u32, cap: usize) -> Vec<
             let c = (i % width as usize) as i32;
             let r = (i / width as usize) as i32;
             for (nc, nr) in hex_neighbors(c, r) {
-                if let Some(ni) = tile_idx(nc, nr, width, height) {
-                    if member_set.contains(&ni) && !assigned.contains(&ni) {
+                if let Some(ni) = tile_idx(nc, nr, width, height)
+                    && member_set.contains(&ni) && !assigned.contains(&ni) {
                         assigned.insert(ni);
                         queue.push_back(ni);
                     }
-                }
             }
         }
         chunks.push(chunk);

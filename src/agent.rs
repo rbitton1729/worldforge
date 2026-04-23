@@ -66,6 +66,12 @@ pub struct Deeds {
     pub defenses: u32,
 }
 
+impl Default for Deeds {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Deeds {
     pub fn new() -> Self {
         Self {
@@ -339,7 +345,7 @@ pub fn step_agents(
             // Try to eat first if we're standing on food.
             let on_food = world
                 .tile(agent.col, agent.row)
-                .map_or(false, |t| t.food >= 0.5);
+                .is_some_and(|t| t.food >= 0.5);
 
             if on_food && (starving || agent.hunger > 30.0) {
                 // Forage skill rewards efficiency: a 0.5-skill agent gets +10%
@@ -398,17 +404,16 @@ pub fn step_agents(
                 // SKILL_DECAY erodes a founder warrior below the recognition
                 // threshold in an era without fighting, and the deadlock
                 // returns — no warriors → no raids → no fighting skill.
-                if agent.is_warrior() && home.is_some() {
-                    if grow_skill(&mut agent.skills.fighting, FIGHTING_PRACTICE_GROWTH) {
+                if agent.is_warrior() && home.is_some()
+                    && grow_skill(&mut agent.skills.fighting, FIGHTING_PRACTICE_GROWTH) {
                         let line = format!("{} has become a seasoned warrior.", agent.name);
                         record_skill_milestone(agent, chronicle, tick, line);
                     }
-                }
             }
 
             // Settled foragers gather surplus for the stockpile.
-            if agent.hunger < 30.0 {
-                if let Some(sid) = agent.settlement {
+            if agent.hunger < 30.0
+                && let Some(sid) = agent.settlement {
                     let tile_food = world
                         .tile(agent.col, agent.row)
                         .map(|t| t.food)
@@ -440,22 +445,18 @@ pub fn step_agents(
                         }
                     }
                 }
-            }
 
             // Starving settled agents can eat from the stockpile if close to home.
-            if starving {
-                if let Some(sid) = agent.settlement {
-                    if let Some(s) = settlements.list.iter_mut().find(|s| s.id == sid) {
-                        if world.hex_distance((s.col, s.row), (agent.col, agent.row)) <= 1
+            if starving
+                && let Some(sid) = agent.settlement
+                    && let Some(s) = settlements.list.iter_mut().find(|s| s.id == sid)
+                        && world.hex_distance((s.col, s.row), (agent.col, agent.row)) <= 1
                             && s.stockpile >= 0.5
                         {
                             let bite = BITE_SIZE.min(s.stockpile);
                             s.stockpile -= bite;
                             agent.hunger = (agent.hunger - bite * FOOD_TO_HUNGER).max(0.0);
                         }
-                    }
-                }
-            }
         }
 
         // Starvation damage. Agents whose settlement has a religion take a
@@ -465,7 +466,7 @@ pub fn step_agents(
             let faith_bonus = agent
                 .settlement
                 .and_then(|sid| settlements.list.iter().find(|s| s.id == sid))
-                .map_or(false, |s| s.religion.is_some());
+                .is_some_and(|s| s.religion.is_some());
             let damage = if faith_bonus {
                 STARVE_DAMAGE * 0.8
             } else {
@@ -566,7 +567,7 @@ fn step_merchant(
     let home_alive = agent
         .settlement
         .and_then(|id| settlements.list.iter().find(|s| s.id == id))
-        .map_or(false, |s| s.alive);
+        .is_some_and(|s| s.alive);
     if !home_alive {
         agent.settlement = None;
     }
@@ -583,14 +584,13 @@ fn step_merchant(
             .tile(agent.col, agent.row)
             .map(|t| t.food)
             .unwrap_or(0.0);
-        if tile_food >= 0.5 {
-            if let Some(t) = world.tile_mut(agent.col, agent.row) {
+        if tile_food >= 0.5
+            && let Some(t) = world.tile_mut(agent.col, agent.row) {
                 let bite = BITE_SIZE.min(t.food);
                 t.food -= bite;
                 t.fertility = (t.fertility - FERTILITY_PER_BITE * (bite / BITE_SIZE)).max(0.0);
                 agent.hunger = (agent.hunger - bite * FOOD_TO_HUNGER).max(0.0);
             }
-        }
     }
 
     // If carrying cargo toward a destination, travel; if arrived, deliver.
@@ -731,7 +731,7 @@ fn move_agent_to(world: &World, agent: &mut Agent, target: (i32, i32)) {
     }
     let stepped_onto_mountain = world
         .tile(nc, nr)
-        .map_or(false, |t| t.biome == Biome::Mountains);
+        .is_some_and(|t| t.biome == Biome::Mountains);
     agent.col = nc;
     agent.row = nr;
     if stepped_onto_mountain {
@@ -749,15 +749,14 @@ fn find_nearby_food(world: &World, col: i32, row: i32, radius: i32) -> Option<(i
             if world.hex_distance((col, row), (c, r)) > radius {
                 continue;
             }
-            if let Some(tile) = world.tile(c, r) {
-                if tile.food >= 1.0 {
+            if let Some(tile) = world.tile(c, r)
+                && tile.food >= 1.0 {
                     let score = tile.food - world.hex_distance((col, row), (c, r)) as f32 * 0.5;
                     match best {
                         Some((_, s)) if s >= score => {}
                         _ => best = Some(((c, r), score)),
                     }
                 }
-            }
         }
     }
     best.map(|(pos, _)| pos)
@@ -770,7 +769,7 @@ fn step_toward(world: &World, col: i32, row: i32, tc: i32, tr: i32) -> (i32, i32
     let cur = world.hex_distance((col, row), (tc, tr));
     let cur_mountain = world
         .tile(col, row)
-        .map_or(false, |t| t.biome == Biome::Mountains);
+        .is_some_and(|t| t.biome == Biome::Mountains);
     let mut best = (col, row);
     let mut best_score: (i32, u8) = (cur, if cur_mountain { 1 } else { 0 });
     for (nc, nr) in world.neighbors(col, row) {
@@ -780,7 +779,7 @@ fn step_toward(world: &World, col: i32, row: i32, tc: i32, tr: i32) -> (i32, i32
         let d = world.hex_distance((nc, nr), (tc, tr));
         let is_mountain = world
             .tile(nc, nr)
-            .map_or(false, |t| t.biome == Biome::Mountains);
+            .is_some_and(|t| t.biome == Biome::Mountains);
         let score = (d, if is_mountain { 1 } else { 0 });
         if score < best_score {
             best_score = score;
@@ -810,7 +809,7 @@ fn wander(world: &World, col: i32, row: i32, rng: &mut ChaCha8Rng) -> (i32, i32)
         .filter(|&(c, r)| {
             world
                 .tile(c, r)
-                .map_or(true, |t| t.biome != Biome::Mountains)
+                .is_none_or(|t| t.biome != Biome::Mountains)
         })
         .collect();
     let pool = if flat.is_empty() { &passable } else { &flat };
@@ -852,8 +851,8 @@ pub fn seed_agents(world: &World, n: u32, rng: &mut ChaCha8Rng) -> Vec<Agent> {
         attempts += 1;
         let col = rng.gen_range(0..world.width as i32);
         let row = rng.gen_range(0..world.height as i32);
-        if let Some(tile) = world.tile(col, row) {
-            if tile.biome.is_passable() && tile.biome.food_cap() > 0.0 {
+        if let Some(tile) = world.tile(col, row)
+            && tile.biome.is_passable() && tile.biome.food_cap() > 0.0 {
                 // Stagger starting ages so the founding generation doesn't all die at once.
                 let mut agent = Agent::new(placed, pick_name(rng), col, row, roll_lifespan(rng));
                 agent.age = rng.gen_range(0..LIFESPAN_BASE / 2);
@@ -864,7 +863,6 @@ pub fn seed_agents(world: &World, n: u32, rng: &mut ChaCha8Rng) -> Vec<Agent> {
                 out.push(agent);
                 placed += 1;
             }
-        }
     }
     out
 }

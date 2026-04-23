@@ -215,22 +215,20 @@ impl World {
 
     /// Is (col, row) inside the map and land?
     pub fn is_land(&self, col: i32, row: i32) -> bool {
-        self.tile(col, row).map_or(false, |t| t.biome.is_passable())
+        self.tile(col, row).is_some_and(|t| t.biome.is_passable())
     }
 
     /// Check if a tile has a river on it or is adjacent to one.
     pub fn is_near_river(&self, col: i32, row: i32) -> bool {
-        if let Some(i) = self.idx(col, row) {
-            if self.tiles[i].river > 0 {
+        if let Some(i) = self.idx(col, row)
+            && self.tiles[i].river > 0 {
                 return true;
             }
-        }
         for (nc, nr) in self.neighbors(col, row) {
-            if let Some(ni) = self.idx(nc, nr) {
-                if self.tiles[ni].river > 0 {
+            if let Some(ni) = self.idx(nc, nr)
+                && self.tiles[ni].river > 0 {
                     return true;
                 }
-            }
         }
         false
     }
@@ -271,7 +269,7 @@ impl World {
     /// freshly crossed this year.
     pub fn tick_climate(&mut self, tick: u64) -> Option<&'static str> {
         let ticks_per_year = crate::chronicle::TICKS_PER_YEAR;
-        if tick == 0 || tick % ticks_per_year != 0 {
+        if tick == 0 || !tick.is_multiple_of(ticks_per_year) {
             return None;
         }
         let year = tick / ticks_per_year;

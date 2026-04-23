@@ -157,13 +157,13 @@ pub fn run_simulation(cfg: SimConfig, chronicle: &mut Chronicle) -> SimOutcome {
         chronicle.set_header_stats(alive_count(&agents), settlements.alive_count());
 
         // Settlement population reports twice a year (every 2 seasons = 50 ticks).
-        if tick % (chronicle::TICKS_PER_YEAR / 2) == 0 {
+        if tick.is_multiple_of(chronicle::TICKS_PER_YEAR / 2) {
             report_settlements(&settlements, chronicle, tick);
         }
 
         // Once per year, report on the state of the world if it's changed meaningfully.
         let year = tick / chronicle::TICKS_PER_YEAR + 1;
-        if tick % chronicle::TICKS_PER_YEAR == 0 && year != last_report_year {
+        if tick.is_multiple_of(chronicle::TICKS_PER_YEAR) && year != last_report_year {
             last_report_year = year;
             let pop = alive_count(&agents);
             let delta = pop as isize - last_population_reported as isize;
@@ -307,14 +307,13 @@ fn report_settlements(settlements: &Settlements, chronicle: &mut Chronicle, tick
             format!("{} {} {} souls.", s.name, verb, s.population),
         ));
     }
-    if let Some(s) = alive.last().copied() {
-        if alive.len() > 1 && s.population <= 4 {
+    if let Some(s) = alive.last().copied()
+        && alive.len() > 1 && s.population <= 4 {
             chronicle.record(Event::new(
                 tick,
                 format!("{} dwindles to {} inhabitants.", s.name, s.population),
             ));
         }
-    }
 }
 
 fn describe_major_regions(world: &World) -> String {

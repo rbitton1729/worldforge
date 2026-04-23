@@ -169,13 +169,11 @@ fn run_inner(
 
     loop {
         // --- input (non-blocking poll)
-        if event::poll(Duration::from_millis(0))? {
-            if let event::Event::Key(key) = event::read()? {
-                if handle_key(key, &mut ui, &settlements, &world) {
+        if event::poll(Duration::from_millis(0))?
+            && let event::Event::Key(key) = event::read()?
+                && handle_key(key, &mut ui, &settlements, &world) {
                     break;
                 }
-            }
-        }
 
         // --- tick (pacing-controlled)
         let now = Instant::now();
@@ -210,7 +208,7 @@ fn run_inner(
 
             // Yearly population delta — same condition as run_simulation.
             let year = tick / TICKS_PER_YEAR + 1;
-            if tick % TICKS_PER_YEAR == 0 && year != last_report_year {
+            if tick.is_multiple_of(TICKS_PER_YEAR) && year != last_report_year {
                 last_report_year = year;
                 let pop = alive_count(&agents);
                 let delta = pop as isize - last_population_reported as isize;
@@ -349,16 +347,14 @@ fn handle_key(key: KeyEvent, ui: &mut TuiState, settlements: &Settlements, world
                 }
             }
         }
-        KeyCode::Left => {
-            if !in_chronicle {
+        KeyCode::Left
+            if !in_chronicle => {
                 ui.cam_col -= pan;
             }
-        }
-        KeyCode::Right => {
-            if !in_chronicle {
+        KeyCode::Right
+            if !in_chronicle => {
                 ui.cam_col += pan;
             }
-        }
         KeyCode::Up => {
             if in_chronicle {
                 ui.chronicle_scroll = ui.chronicle_scroll.saturating_sub(1);
@@ -373,16 +369,14 @@ fn handle_key(key: KeyEvent, ui: &mut TuiState, settlements: &Settlements, world
                 ui.cam_row += pan;
             }
         }
-        KeyCode::PageUp => {
-            if in_chronicle {
+        KeyCode::PageUp
+            if in_chronicle => {
                 ui.chronicle_scroll = ui.chronicle_scroll.saturating_sub(10);
             }
-        }
-        KeyCode::PageDown => {
-            if in_chronicle {
+        KeyCode::PageDown
+            if in_chronicle => {
                 ui.chronicle_scroll = ui.chronicle_scroll.saturating_add(10);
             }
-        }
         _ => {}
     }
     // Keep the camera in a sane range — never more than a map's width/height
@@ -955,7 +949,7 @@ fn draw_map_halfblock(
         let flashing = ui
             .flash_until
             .get(&st.id)
-            .map_or(false, |until| *until >= tick);
+            .is_some_and(|until| *until >= tick);
         let bg = if flashing { C_FLASH_BG } else { tile_bg };
         // Culturally notable = has customs or harbors a living legend agent.
         // Underlined marker is the subtlest signal that fits in a half-block cell.
@@ -1204,7 +1198,7 @@ fn draw_map_zoomed_in(
         let flashing = ui
             .flash_until
             .get(&st.id)
-            .map_or(false, |until| *until >= tick);
+            .is_some_and(|until| *until >= tick);
         marker_tile.insert(
             (tc, tr),
             Mk {
