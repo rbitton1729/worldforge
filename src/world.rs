@@ -124,6 +124,9 @@ pub struct World {
     climate_warm_notified: bool,
     climate_cold_notified: bool,
     climate_rng: ChaCha8Rng,
+    /// Precomputed per-tile: true if this tile has a river or touches one.
+    /// Rivers never change after world generation, so we bake this once.
+    river_adjacent: Vec<bool>,
 }
 
 impl World {
@@ -135,7 +138,7 @@ impl World {
         let dir_scale: f32 = climate_rng.gen_range(0.6f32..=1.4f32);
         let climate_direction = dir_sign * CLIMATE_DRIFT_MAGNITUDE * dir_scale;
         let climate_next_flip_year = climate_rng.gen_range(50..=100);
-        Self {
+        let mut world = Self {
             width,
             height,
             tiles,
@@ -147,7 +150,10 @@ impl World {
             climate_warm_notified: false,
             climate_cold_notified: false,
             climate_rng,
-        }
+            river_adjacent: Vec::new(),
+        };
+        world.recompute_river_adjacent();
+        world
     }
 
     /// Return the region containing (col, row), if any.
@@ -218,35 +224,48 @@ impl World {
         self.tile(col, row).is_some_and(|t| t.biome.is_passable())
     }
 
+    /// Precompute which tiles have a river or are adjacent to one. Called once
+    /// during world generation and should be called again after any tile surgery
+    /// that reroutes rivers (currently never happens — rivers are static).
+    pub fn recompute_river_adjacent(&mut self) {
+        self.river_adjacent = vec![false; self.tiles.len()];
+        for row in 0..self.height as i32 {
+            for col in 0..self.width as i32 {
+                let i = match self.idx(col, row) {
+                    Some(i) => i,
+                    None => continue,
+                };
+                if self.tiles[i].river > 0 {
+                    // The river tile itself gets the bonus.
+                    self.river_adjacent[i] = true;
+                    // And all its passable neighbors.
+                    for (nc, nr) in self.neighbors(col, row) {
+                        if let Some(ni) = self.idx(nc, nr) {
+                            self.river_adjacent[ni] = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Check if a tile has a river on it or is adjacent to one.
     pub fn is_near_river(&self, col: i32, row: i32) -> bool {
-        if let Some(i) = self.idx(col, row)
-            && self.tiles[i].river > 0 {
-                return true;
-            }
-        for (nc, nr) in self.neighbors(col, row) {
-            if let Some(ni) = self.idx(nc, nr)
-                && self.tiles[ni].river > 0 {
-                    return true;
-                }
+        match self.idx(col, row) {
+            Some(i) => self.river_adjacent[i],
+            None => false,
         }
-        false
     }
 
     pub fn regen_food(&mut self, tick: u64) {
         let factor = season_regen_factor(tick);
         let climate_factor = (1.0 + self.climate_drift * 0.5).max(0.0);
-        // Precompute river-adjacency so the subsequent mut borrow of tiles is clean.
-        let mut bonus = vec![false; self.tiles.len()];
-        for row in 0..self.height as i32 {
-            for col in 0..self.width as i32 {
-                if self.is_near_river(col, row) {
-                    bonus[self.idx(col, row).unwrap()] = true;
-                }
-            }
-        }
         for (i, tile) in self.tiles.iter_mut().enumerate() {
-            let (regen_mul, cap_mul) = if bonus[i] { (1.5, 1.5) } else { (1.0, 1.0) };
+            let (regen_mul, cap_mul) = if self.river_adjacent[i] {
+                (1.5, 1.5)
+            } else {
+                (1.0, 1.0)
+            };
             let fert = tile.fertility;
             let regen = tile.biome.food_regen() * factor * climate_factor * regen_mul * fert;
             let cap = tile.biome.food_cap() * cap_mul * fert.max(FERTILITY_CAP_FLOOR);

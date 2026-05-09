@@ -234,3 +234,33 @@ fn foraging_depletes_land() {
         min_fertile_biome
     );
 }
+
+#[test]
+fn river_adjacent_cache_does_not_drift() {
+    // Rivers are static — the precomputed `river_adjacent` cache must not
+    // change across ticks.  This catches accidental mutation of the cache
+    // in `regen_food` or any other per-tick path.
+    let mut w = World::generate(80, 40, 42);
+    let mut before = Vec::with_capacity((w.width * w.height) as usize);
+    for r in 0..w.height as i32 {
+        for c in 0..w.width as i32 {
+            before.push(w.is_near_river(c, r));
+        }
+    }
+
+    for tick in 0..200 {
+        w.regen_food(tick);
+    }
+
+    let mut after = Vec::with_capacity((w.width * w.height) as usize);
+    for r in 0..w.height as i32 {
+        for c in 0..w.width as i32 {
+            after.push(w.is_near_river(c, r));
+        }
+    }
+
+    assert_eq!(
+        before, after,
+        "river_adjacent cache mutated across regen_food calls — rivers should be static"
+    );
+}
